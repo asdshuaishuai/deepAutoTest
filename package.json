@@ -1,0 +1,46 @@
+{
+  "name": "deepautotest-kernel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "deepAutoTest 基座（headless kernel）——上层无关：不含 GUI / webview / 网络出站，只含真相与门",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "preflight": "node scripts/preflight.mjs",
+    "pretest": "node scripts/preflight.mjs",
+    "pretypecheck": "node scripts/preflight.mjs",
+    "predemo": "node scripts/preflight.mjs",
+    "predemo:exec": "node scripts/preflight.mjs",
+    "predemo:e2e": "node scripts/preflight.mjs",
+    "predemo:dbcheck": "node scripts/preflight.mjs",
+    "predemo:agent": "node scripts/preflight.mjs",
+    "predemo:prd": "node scripts/preflight.mjs",
+    "demo": "node scripts/demo.ts",
+    "demo:exec": "node scripts/demo-exec.ts",
+    "demo:e2e": "node scripts/demo-e2e.ts",
+    "demo:dbcheck": "node scripts/demo-dbcheck.ts",
+    "demo:agent": "node scripts/demo-agent.ts",
+    "demo:prd": "node scripts/demo-prd.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "ts-morph": "^28.0.0",
+    "undici": "^8.10.2"
+  },
+  "optionalDependencies": {
+    "libfx": "^0.0.12",
+    "mysql2": "^3.24.5",
+    "pg": "^8.23.1",
+    "playwright-core": "^1.63.0"
+  }
+}

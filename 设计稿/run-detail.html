@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>deepAutoTest · 界面设计稿 v1.0</title>
+<style>
+  :root{
+    --bg:#0d1117; --bg-1:#161b22; --bg-2:#1c2128; --bg-3:#21262d;
+    --bd:#30363d; --bd-2:#3d444d;
+    --tx:#e6edf3; --tx-2:#9ba7b4; --tx-3:#6e7681;
+    --pass:#3fb950; --fail:#f85149; --degraded:#d29922; --errored:#8b949e;
+    --flaky:#bc8cff; --skipped:#484f58; --accent:#58a6ff; --accent-2:#1f6feb;
+    --new:#f0883e;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#05080d;color:var(--tx);font-family:var(--sans);font-size:13px;line-height:1.5;padding:24px}
+  .wrap{max-width:1560px;margin:0 auto}
+  h1{font-size:20px;font-weight:600;margin-bottom:4px}
+  .sub{color:var(--tx-2);font-size:12px;margin-bottom:20px}
+  .note{background:var(--bg-1);border:1px solid var(--bd);border-left:3px solid var(--accent);
+        padding:14px 16px;border-radius:6px;margin-bottom:22px;font-size:12px;color:var(--tx-2);line-height:1.8}
+  .note b{color:var(--tx)}
+
+  /* ===== 窗口外框 ===== */
+  .win{background:var(--bg);border:1px solid var(--bd);border-radius:10px;overflow:hidden;
+       box-shadow:0 16px 48px rgba(0,0,0,.55)}
+  .titlebar{display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--bg-1);
+            border-bottom:1px solid var(--bd)}
+  .lights{display:flex;gap:7px}
+  .lights i{width:11px;height:11px;border-radius:50%;display:block}
+  .lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}
+  .lights i:nth-child(3){background:#28c840}
+  .tb-title{color:var(--tx-3);font-size:12px;margin-left:6px}
+
+  /* ===== 顶栏 ===== */
+  .topbar{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-1);
+          border-bottom:1px solid var(--bd)}
+  .proj-switch{display:flex;align-items:center;gap:8px;background:var(--bg-3);border:1px solid var(--bd-2);
+               border-radius:6px;padding:5px 10px;cursor:pointer;font-weight:500}
+  .proj-switch .caret{color:var(--tx-3);font-size:10px}
+  .proj-switch .pkg{font-size:14px}
+  .badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:600;
+         padding:2px 7px;border-radius:10px;line-height:1.4}
+  .badge.alert{background:rgba(248,81,73,.15);color:var(--fail);border:1px solid rgba(248,81,73,.35)}
+  .tabs{display:flex;gap:2px}
+  .tab{padding:6px 11px;border-radius:6px;color:var(--tx-2);cursor:pointer;font-size:12.5px}
+  .tab:hover{background:var(--bg-3);color:var(--tx)}
+  .tab.on{background:var(--bg-3);color:var(--tx);font-weight:500}
+  .tab .cnt{color:var(--tx-3);font-size:11px;margin-left:4px}
+  .grow{flex:1}
+  .scope-chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--tx-3);
+              border:1px solid var(--bd);border-radius:12px;padding:3px 10px}
+  .icon-btn{width:28px;height:28px;display:grid;place-items:center;border-radius:6px;
+            color:var(--tx-2);cursor:pointer;border:1px solid transparent}
+  .icon-btn:hover{background:var(--bg-3);color:var(--tx)}
+  .kbd{font-family:var(--mono);font-size:10px;background:var(--bg-3);border:1px solid var(--bd-2);
+       border-radius:4px;padding:1px 5px;color:var(--tx-2)}
+
+  /* ===== 主区 ===== */
+  .main{display:grid;grid-template-columns:220px 1fr 330px;height:760px;overflow:hidden}
+
+  /* 左栏 */
+  .side{border-right:1px solid var(--bd);background:var(--bg-1);padding:12px 0;overflow-y:auto;min-height:0}
+  .side-h{padding:0 14px 8px;font-size:10.5px;letter-spacing:.6px;color:var(--tx-3);
+          text-transform:uppercase;font-weight:600}
+  .side-i{display:flex;align-items:center;gap:8px;padding:6px 14px;color:var(--tx-2);
+          cursor:pointer;font-size:12.5px;border-left:2px solid transparent}
+  .side-i:hover{background:var(--bg-2);color:var(--tx)}
+  .side-i.on{background:var(--bg-2);color:var(--tx);border-left-color:var(--accent);font-weight:500}
+  .side-i .n{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--tx-3)}
+
+  /* 中栏 */
+  .center{padding:16px 18px;overflow-y:auto;min-height:0}
+
+  .run-head{background:var(--bg-1);border:1px solid var(--bd);border-radius:8px;padding:14px;margin-bottom:12px}
+  .run-title{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+  .run-title .id{font-family:var(--mono);font-size:14px;font-weight:600}
+  .meta{color:var(--tx-2);font-size:12px}
+  .dot{color:var(--tx-3);margin:0 2px}
+
+  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:12px}
+  .stat{background:var(--bg-2);border:1px solid var(--bd);border-radius:6px;padding:9px 11px;
+        border-top:2px solid transparent}
+  .stat.pass{border-top-color:var(--pass)} .stat.fail{border-top-color:var(--fail)}
+  .stat.deg{border-top-color:var(--degraded)} .stat.err{border-top-color:var(--errored)}
+  .stat.flk{border-top-color:var(--flaky)}
+  .stat .v{font-size:20px;font-weight:600;font-family:var(--mono);line-height:1.2}
+  .stat.pass .v{color:var(--pass)} .stat.fail .v{color:var(--fail)}
+  .stat.deg .v{color:var(--degraded)} .stat.err .v{color:var(--errored)}
+  .stat.flk .v{color:var(--flaky)}
+  .stat .k{font-size:11px;color:var(--tx-3);display:flex;align-items:center;gap:4px}
+
+  .prog-row{display:flex;align-items:center;gap:12px}
+  .bar{flex:1;height:6px;background:var(--bg-3);border-radius:3px;overflow:hidden;position:relative}
+  .bar i{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--accent-2),var(--accent));
+         border-radius:3px}
+  .bar-done{z-index:2;background:var(--pass)!important}
+  .prog-meta{font-size:11.5px;color:var(--tx-2);font-family:var(--mono);white-space:nowrap}
+
+  .alert-bar{display:flex;align-items:center;gap:9px;background:rgba(240,136,62,.1);
+             border:1px solid rgba(240,136,62,.35);border-radius:6px;padding:8px 12px;
+             margin-bottom:12px;font-size:12.5px;color:#ffb77d}
+  .alert-bar b{color:var(--new)}
+
+  .filters{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+  .seg{display:flex;background:var(--bg-2);border:1px solid var(--bd);border-radius:6px;overflow:hidden}
+  .seg span{padding:5px 11px;font-size:12px;color:var(--tx-2);cursor:pointer}
+  .seg span.on{background:var(--bg-3);color:var(--tx);font-weight:500}
+  .search{flex:1;min-width:140px;max-width:260px;background:var(--bg-2);border:1px solid var(--bd);
+          border-radius:6px;padding:5px 10px;color:var(--tx-3);font-size:12px}
+
+  /* 结果表 */
+  .table{border:1px solid var(--bd);border-radius:8px;overflow:hidden;background:var(--bg-1)}
+  .thead,.trow{display:grid;grid-template-columns:26px 92px minmax(0,1fr) 168px 56px 78px 48px;align-items:center;
+               gap:14px;padding:0 12px}
+  .thead{height:32px;background:var(--bg-2);border-bottom:1px solid var(--bd);
+         font-size:10.5px;color:var(--tx-3);text-transform:uppercase;letter-spacing:.5px;font-weight:600}
+  .trow{height:34px;border-bottom:1px solid rgba(48,54,61,.5);font-size:12.5px;cursor:pointer}
+  .trow:hover{background:var(--bg-2)}
+  .trow.on{background:rgba(88,166,255,.1);box-shadow:inset 3px 0 0 var(--accent)}
+  .trow.newfail{box-shadow:inset 3px 0 0 var(--new)}
+  .trow.newfail.on{box-shadow:inset 3px 0 0 var(--accent),inset 0 0 0 1px rgba(240,136,62,.4)}
+  .vicon{width:18px;height:18px;border-radius:4px;display:grid;place-items:center;
+         font-size:11px;font-weight:700;font-family:var(--mono)}
+  .v-pass{background:rgba(63,185,80,.16);color:var(--pass)}
+  .v-fail{background:rgba(248,81,73,.16);color:var(--fail)}
+  .v-deg{background:rgba(210,153,34,.16);color:var(--degraded)}
+  .v-err{background:rgba(139,148,158,.16);color:var(--errored)}
+  .v-flk{background:rgba(188,140,255,.16);color:var(--flaky)}
+  .method{font-family:var(--mono);font-size:10.5px;font-weight:600;padding:1px 5px;border-radius:3px}
+  .m-post{background:rgba(63,185,80,.14);color:#56d364}
+  .m-get{background:rgba(88,166,255,.14);color:#79c0ff}
+  .m-del{background:rgba(248,81,73,.14);color:#ff7b72}
+  .path{font-family:var(--mono);font-size:12px;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .plabel{font-family:var(--mono);font-size:11.5px;color:var(--tx-2);overflow:hidden;
+          text-overflow:ellipsis;white-space:nowrap}
+  .dur{font-family:var(--mono);font-size:11.5px;color:var(--tx-2);text-align:right}
+  .dur.warn{color:var(--degraded)}
+  .vd{font-size:11.5px;font-weight:500}
+  .vd.pass{color:var(--pass)}.vd.fail{color:var(--fail)}.vd.deg{color:var(--degraded)}
+  .vd.err{color:var(--errored)}.vd.flk{color:var(--flaky)}
+  .att{font-family:var(--mono);font-size:10px;color:var(--tx-3);text-align:center}
+  .newtag{background:var(--new);color:#0d1117;font-size:9px;font-weight:800;padding:1px 4px;
+          border-radius:3px;letter-spacing:.3px}
+  .v-skip{background:rgba(72,79,88,.3);color:var(--skipped)}
+  .vlist-foot{padding:7px 12px;font-size:11px;color:var(--tx-3);background:var(--bg-2);
+              border-top:1px dashed var(--bd)}
+
+  /* 详情面板 */
+  .detail{margin-top:12px;background:var(--bg-1);border:1px solid var(--bd);border-radius:8px}
+  .d-head{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--bd);
+          flex-wrap:wrap}
+  .d-head .t{font-weight:600;font-size:13px}
+  .dtabs{display:flex;gap:2px;margin-left:auto}
+  .dtab{padding:4px 9px;border-radius:5px;font-size:11.5px;color:var(--tx-2);cursor:pointer}
+  .dtab:hover{background:var(--bg-3);color:var(--tx)}
+  .dtab.on{background:var(--bg-3);color:var(--tx);font-weight:500}
+  .d-body{padding:12px 14px}
+
+  /* 断言时间线 */
+  .tl{position:relative;padding-left:20px}
+  .tl::before{content:"";position:absolute;left:5px;top:6px;bottom:6px;width:1.5px;background:var(--bd)}
+  .tli{position:relative;padding:7px 0 7px 6px}
+  .tli::before{content:"";position:absolute;left:-19px;top:13px;width:9px;height:9px;border-radius:50%;
+               background:var(--bg-1);border:2px solid var(--bd-2)}
+  .tli.ok::before{border-color:var(--pass);background:var(--pass)}
+  .tli.bad::before{border-color:var(--fail);background:var(--fail)}
+  .tli.deg::before{border-color:var(--degraded);background:var(--degraded)}
+  .tl-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .tl-exp{font-family:var(--mono);font-size:12px;color:var(--tx)}
+  .tl-store{font-size:10px;padding:1px 6px;border-radius:3px;background:var(--bg-3);color:var(--tx-2)}
+  .tl-store.blocker{color:#ff7b72;background:rgba(248,81,73,.12)}
+  .tl-store.critical{color:#f0883e;background:rgba(240,136,62,.12)}
+  .tl-store.minor{color:#d29922;background:rgba(210,153,34,.12)}
+  .tl-mark{margin-left:auto;font-size:11.5px;font-weight:600;display:flex;align-items:center;gap:6px;padding-left:12px}
+  .tl-mark.ok{color:var(--pass)}.tl-mark.bad{color:var(--fail)}.tl-mark.deg{color:var(--degraded)}
+  .tl-sub{font-size:11.5px;color:var(--tx-2);font-family:var(--mono);margin-top:3px}
+  .tl-src{font-size:11.5px;color:var(--accent);cursor:pointer;margin-top:3px;display:inline-block}
+  .tl-src:hover{text-decoration:underline}
+  .tl-note{font-size:11.5px;color:var(--degraded);margin-top:3px}
+
+  /* 代码块 */
+  .code{background:#010409;border:1px solid var(--bd);border-radius:6px;padding:11px 13px;
+        font-family:var(--mono);font-size:11.5px;line-height:1.7;overflow-x:auto}
+  .code .k{color:#79c0ff} .code .s{color:#a5d6ff} .code .n{color:#ffa657}
+  .code .c{color:var(--tx-3)} .code .r{background:rgba(248,81,73,.14);display:block;margin:0 -13px;padding:0 13px}
+  .code .g{background:rgba(63,185,80,.13);display:block;margin:0 -13px;padding:0 13px}
+  .kv{display:grid;grid-template-columns:130px 1fr;gap:5px 12px;font-family:var(--mono);font-size:11.5px}
+  .kv .key{color:var(--tx-3)} .kv .val{color:var(--tx)}
+  .redact{color:var(--tx-3);letter-spacing:1px}
+
+  /* 右栏 Copilot */
+  .copilot{border-left:1px solid var(--bd);background:var(--bg-1);display:flex;flex-direction:column;min-height:0}
+  .cp-head{display:flex;align-items:center;gap:8px;padding:10px 13px;border-bottom:1px solid var(--bd)}
+  .cp-head .t{font-weight:600;font-size:12.5px}
+  .chip{font-size:10px;padding:2px 7px;border-radius:9px;border:1px solid var(--bd-2);color:var(--tx-2)}
+  .chip.ok{color:var(--pass);border-color:rgba(63,185,80,.4);background:rgba(63,185,80,.08)}
+  .cp-body{flex:1;min-height:0;overflow-y:auto;padding:12px 13px;display:flex;flex-direction:column;gap:12px}
+  .msg{font-size:12.5px;line-height:1.6}
+  .msg .who{font-size:11px;color:var(--tx-3);margin-bottom:3px}
+  .steps{display:flex;flex-direction:column;gap:3px;margin:6px 0 0;
+         font-family:var(--mono);font-size:11px;color:var(--tx-2)}
+  .steps div::before{content:"▸ ";color:var(--accent)}
+  .steps div.done::before{content:"✓ ";color:var(--pass)}
+  .card{background:var(--bg-2);border:1px solid var(--bd);border-radius:7px;padding:10px 11px}
+  .card.warn{border-color:rgba(210,153,34,.45);background:rgba(210,153,34,.05)}
+  .card .ct{font-size:12.5px;font-weight:600;margin-bottom:5px}
+  .card .cb{font-size:11.5px;color:var(--tx-2);line-height:1.55}
+  .card .csrc{font-family:var(--mono);font-size:11px;color:var(--accent);margin-top:7px;line-height:1.6}
+  .card.warn .csrc{color:var(--degraded)}
+  .cbtns{display:flex;gap:5px;margin-top:9px}
+  .btn{font-size:11.5px;padding:4px 11px;border-radius:5px;border:1px solid var(--bd-2);
+       background:var(--bg-3);color:var(--tx);cursor:pointer}
+  .btn:hover{border-color:var(--tx-3)}
+  .btn.pri{background:var(--accent-2);border-color:var(--accent-2);color:#fff;font-weight:500}
+  .btn.pri:hover{background:var(--accent)}
+  .btn.gh{background:transparent}
+  .cp-foot{flex-shrink:0;border-top:1px solid var(--bd);padding:12px 13px 16px}
+  .input{display:flex;gap:10px;align-items:center;background:var(--bg-2);border:1px solid var(--bd);
+         border-radius:6px;padding:8px 10px;color:var(--tx-3);font-size:12px}
+  .input .ph{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .input .grow{color:var(--tx-3)}
+
+  /* 状态栏 */
+  .statusbar{display:flex;align-items:center;gap:14px;padding:7px 14px;background:var(--bg-1);
+             border-top:1px solid var(--bd);font-size:11px;color:var(--tx-3);font-family:var(--mono)}
+  .statusbar .sb{display:flex;align-items:center;gap:5px}
+  .sb-dot{width:6px;height:6px;border-radius:50%;background:var(--pass)}
+  .sb-dot.run{background:var(--accent);animation:pulse 1.4s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* 溯源 */
+  .prov{display:flex;flex-direction:column;gap:9px}
+  .prov-g{background:var(--bg-2);border:1px solid var(--bd);border-radius:6px;padding:9px 11px}
+  .prov-g .h{font-size:10.5px;color:var(--tx-3);text-transform:uppercase;letter-spacing:.5px;
+             font-weight:600;margin-bottom:6px}
+  .prov-i{display:flex;align-items:center;gap:8px;font-size:12px;padding:3px 0;flex-wrap:wrap}
+  .prov-i .rule{font-family:var(--mono);color:var(--tx)}
+  .prov-i .loc{font-family:var(--mono);font-size:11px;color:var(--accent);cursor:pointer}
+  .prov-i .loc:hover{text-decoration:underline}
+
+  /* 图例 */
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:18px;padding:14px;background:var(--bg-1);
+          border:1px solid var(--bd);border-radius:8px}
+  .legend h3{font-size:12px;color:var(--tx-2);width:100%;margin-bottom:4px;font-weight:600}
+  .lg{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--tx-2)}
+  .sw{width:14px;height:14px;border-radius:4px;border:1px solid var(--bd-2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>deepAutoTest · 界面设计稿 v1.0</h1>
+  <div class="sub">源码驱动的 API 自动化测试工作台 · 运行详情视图（含实时结果表 / 断言溯源 / Copilot 协同）</div>
+
+  <div class="note">
+    <b>说明：</b>本稿是 <code>设计文档/03-测试流程.md</code> 与 <code>设计文档/05-结果呈现.md</code> 的视觉落地。
+    所有界面元素均已对应到 React 生态的真实实现（虚拟表格用 <code>@tanstack/react-virtual</code>，
+    断言时间线为语义化 <code>&lt;ol&gt;</code>，报文查看用 Shiki/CodeMirror，图表用 uPlot/recharts）。verdict 用「颜色 + 图标」双重编码以满足无障碍要求。
+    <br><b>当前场景：</b>运行 #128 进行中（78%），与上次运行 #127 对比新增 3 个失败。
+  </div>
+
+  <div class="win">
+    <!-- 标题栏 -->
+    <div class="titlebar">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="tb-title">deepAutoTest — order-service</div>
+    </div>
+
+    <!-- 顶栏：项目作用域 + 页签 -->
+    <div class="topbar">
+      <div class="proj-switch">
+        <span class="pkg">📦</span>
+        <span>order-service</span>
+        <span class="badge alert">3</span>
+        <span class="caret">▾</span>
+      </div>
+      <div class="tabs">
+        <div class="tab on">运行</div>
+        <div class="tab">用例<span class="cnt">37</span></div>
+        <div class="tab">原则<span class="cnt">24</span></div>
+        <div class="tab">数据源<span class="cnt">2</span></div>
+        <div class="tab">归档<span class="cnt">2</span></div>
+        <div class="tab">待复核<span class="cnt">3</span></div>
+      </div>
+      <div class="grow"></div>
+      <div class="scope-chip">🔒 order-service · 作用域</div>
+      <div class="icon-btn" title="命令面板（⌘K）">⌘K</div>
+      <div class="icon-btn" title="设置">⚙</div>
+    </div>
+
+    <div class="main">
+      <!-- 左栏 -->
+      <div class="side">
+        <div class="side-h">当前运行</div>
+        <div class="side-i on"><span>▶</span> #128 进行中<span class="n">78%</span></div>
+        <div class="side-i"><span>✓</span> #127 全通过<span class="n">96%</span></div>
+        <div class="side-i"><span>✓</span> #126 1 失败<span class="n">96%</span></div>
+        <div class="side-h" style="margin-top:14px">筛选</div>
+        <div class="side-i">仅我可见<span class="n">—</span></div>
+        <div class="side-h" style="margin-top:14px">按接口</div>
+        <div class="side-i">POST /orders<span class="n">4</span></div>
+        <div class="side-i">GET /orders<span class="n">3</span></div>
+        <div class="side-i">POST /users<span class="n">2</span></div>
+        <div class="side-i" style="color:var(--degraded)">未覆盖<span class="n">12</span></div>
+        <div class="side-h" style="margin-top:14px">按状态</div>
+        <div class="side-i">失败<span class="n">3</span></div>
+        <div class="side-i">不稳定<span class="n">2</span></div>
+        <div class="side-i">降级<span class="n">5</span></div>
+        <div class="side-i">出错<span class="n">1</span></div>
+      </div>
+
+      <!-- 中栏 -->
+      <div class="center">
+        <!-- 运行头 -->
+        <div class="run-head">
+          <div class="run-title">
+            <span class="id">运行 #128</span>
+            <span class="meta">plan-7f3a <span class="dot">·</span> 环境 <b>dev</b>
+              <span class="dot">·</span> 由 human 触发 <span class="dot">·</span> 14:32:05</span>
+            <span class="grow"></span>
+            <span class="badge" style="background:rgba(88,166,255,.14);color:var(--accent);border:1px solid rgba(88,166,255,.35)">
+              <span style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>
+              进行中
+            </span>
+          </div>
+
+          <div class="stats">
+            <div class="stat pass"><div class="v">91%</div><div class="k">✓ 通过率</div></div>
+            <div class="stat fail"><div class="v">3</div><div class="k">✗ 失败 <span class="newtag">+3 NEW</span></div></div>
+            <div class="stat deg"><div class="v">5</div><div class="k">! 降级</div></div>
+            <div class="stat err"><div class="v">1</div><div class="k">⌁ 出错</div></div>
+            <div class="stat flk"><div class="v">2</div><div class="k">◐ 不稳定</div></div>
+          </div>
+
+          <div class="prog-row">
+            <div class="bar">
+              <i class="bar-done" style="width:71%"></i>
+              <i style="width:78%"></i>
+            </div>
+            <span class="prog-meta">434 / 556 项</span>
+            <span class="meta">预计剩余 <b style="color:var(--tx)">42s</b></span>
+            <span class="meta">并发 <b style="color:var(--tx)">1</b></span>
+            <span class="grow"></span>
+            <button class="btn gh">停止</button>
+            <button class="btn" disabled style="opacity:.45">重判</button>
+          </div>
+        </div>
+
+        <!-- 新失败警示 -->
+        <div class="alert-bar">
+          <span>⚠</span>
+          <span>相比 #127 新增 <b>3 个失败</b>，集中在 POST /orders/create</span>
+          <span class="grow"></span>
+          <span style="cursor:pointer;text-decoration:underline">仅看已变更 →</span>
+        </div>
+
+        <!-- 筛选条 -->
+        <div class="filters">
+          <div class="seg">
+            <span class="on">全部 556</span>
+            <span>仅失败 3</span>
+            <span>仅不稳定 2</span>
+            <span>仅已变更 3</span>
+          </div>
+          <div class="search">🔍 搜索用例名或路径…</div>
+          <div class="grow"></div>
+          <button class="btn gh">按接口分组</button>
+        </div>
+
+        <!-- 结果表 -->
+        <div class="table">
+          <div class="thead">
+            <span></span><span>状态</span><span>接口 / 用例</span><span>参数行</span>
+            <span style="text-align:center">尝试</span><span style="text-align:right">耗时</span>
+            <span style="text-align:right">序号</span>
+          </div>
+
+          <div class="trow newfail">
+            <span class="vicon v-fail">✗</span>
+            <span><span class="method m-post">POST</span></span>
+            <span class="path">/orders/create <span class="newtag">NEW</span></span>
+            <span class="plabel">金额=50001 (超限)</span>
+            <span class="att">3</span>
+            <span class="dur">210ms</span>
+            <span class="dur">47</span>
+          </div>
+
+          <div class="trow on">
+            <span class="vicon v-fail">✗</span>
+            <span><span class="method m-post">POST</span></span>
+            <span class="path">/orders/create</span>
+            <span class="plabel">金额=50000 (边界)</span>
+            <span class="att">3</span>
+            <span class="dur">190ms</span>
+            <span class="dur">46</span>
+          </div>
+
+          <div class="trow newfail">
+            <span class="vicon v-flk">◐</span>
+            <span><span class="method m-get">GET</span></span>
+            <span class="path">/orders/:id</span>
+            <span class="plabel">id=真实样本</span>
+            <span class="att">3</span>
+            <span class="dur warn">1.2s</span>
+            <span class="dur">45</span>
+          </div>
+
+          <div class="trow">
+            <span class="vicon v-err">⌁</span>
+            <span><span class="method m-get">GET</span></span>
+            <span class="path">/reports/summary</span>
+            <span class="plabel">—</span>
+            <span class="att">2</span>
+            <span class="dur warn">5.0s</span>
+            <span class="dur">44</span>
+          </div>
+
+          <div class="trow">
+            <span class="vicon v-deg">!</span>
+            <span><span class="method m-get">GET</span></span>
+            <span class="path">/users/me</span>
+            <span class="plabel">—</span>
+            <span class="att">1</span>
+            <span class="dur">88ms</span>
+            <span class="dur">43</span>
+          </div>
+
+          <div class="trow">
+            <span class="vicon v-pass">✓</span>
+            <span><span class="method m-post">POST</span></span>
+            <span class="path">/orders/create</span>
+            <span class="plabel">金额=49999 (边界内)</span>
+            <span class="att">1</span>
+            <span class="dur">128ms</span>
+            <span class="dur">42</span>
+          </div>
+
+          <div class="trow">
+            <span class="vicon v-pass">✓</span>
+            <span><span class="method m-get">GET</span></span>
+            <span class="path">/orders</span>
+            <span class="plabel">page=1 空结果</span>
+            <span class="att">1</span>
+            <span class="dur">96ms</span>
+            <span class="dur">41</span>
+          </div>
+
+          <div class="trow">
+            <span class="vicon v-skip">–</span>
+            <span><span class="method m-del">DELETE</span></span>
+            <span class="path" style="color:var(--tx-3)">/orders/:id</span>
+            <span class="plabel" style="color:var(--degraded)">已豁免 · 等修复 #4412</span>
+            <span class="att">—</span>
+            <span class="dur">—</span>
+            <span class="dur">40</span>
+          </div>
+
+          <div class="vlist-foot">虚拟滚动 — 仅渲染可视行（共 556 个执行项，已虚拟化）</div>
+        </div>
+
+        <!-- 详情面板 -->
+        <div class="detail">
+          <div class="d-head">
+            <span class="vicon v-fail">✗</span>
+            <span class="t">POST /orders/create</span>
+            <span class="plabel">金额=50000 (边界)</span>
+            <span class="badge" style="background:rgba(248,81,73,.14);color:var(--fail);border:1px solid rgba(248,81,73,.3)">failed</span>
+            <span class="meta">entry 46 <span class="dot">·</span> 3 次尝试 <span class="dot">·</span> 190ms</span>
+            <div class="dtabs">
+              <div class="dtab on">断言时间线</div>
+              <div class="dtab">请求</div>
+              <div class="dtab">响应</div>
+              <div class="dtab">溯源</div>
+              <div class="dtab">重试历史</div>
+            </div>
+          </div>
+          <div class="d-body">
+            <div class="tl">
+              <div class="tli ok">
+                <div class="tl-top">
+                  <span class="tl-exp">状态码 == 200</span>
+                  <span class="tl-store blocker">阻断 blocker</span>
+                  <span class="tl-mark ok">✓ 通过</span>
+                </div>
+                <div class="tl-sub">期望 200 · 实际 200</div>
+              </div>
+
+              <div class="tli bad">
+                <div class="tl-top">
+                  <span class="tl-exp">响应体 error.code == "AMOUNT_EXCEEDED"</span>
+                  <span class="tl-store critical">关键 critical</span>
+                  <span class="tl-mark bad">✗ 失败 · 第 3/3 次</span>
+                </div>
+                <div class="tl-sub">期望 "AMOUNT_EXCEEDED" · 实际 500</div>
+                <span class="tl-src">↳ 依据 原则#12 金额上限 50,000 → order.controller.ts:88</span>
+              </div>
+
+              <div class="tli ok">
+                <div class="tl-top">
+                  <span class="tl-exp">响应体 amount == 50000</span>
+                  <span class="tl-store critical">关键 critical</span>
+                  <span class="tl-mark ok">✓ 通过</span>
+                </div>
+                <div class="tl-sub">期望 50000 · 实际 50000</div>
+                <span class="tl-src">↳ 依据 真实样本 orders.amount p95=3200 (已脱敏)</span>
+              </div>
+
+              <div class="tli deg">
+                <div class="tl-top">
+                  <span class="tl-exp">响应头 X-Request-Id 存在</span>
+                  <span class="tl-store minor">次要 minor</span>
+                  <span class="tl-mark deg">! 降级</span>
+                </div>
+                <div class="tl-sub">期望 存在 · 实际 缺失</div>
+                <div class="tl-note">⚠ 次要级失败不影响「失败」判定，仅标记为「降级」</div>
+              </div>
+            </div>
+
+            <!-- 请求报文预览 -->
+            <div style="margin-top:14px">
+              <div class="side-h" style="padding-left:0">请求报文（code 组件 · 敏感值已脱敏）</div>
+              <div class="code">
+<span class="c">POST</span> <span class="s">/orders/create</span>
+<span class="k">Host:</span> dev.internal.example.com
+<span class="k">Content-Type:</span> application/json
+<span class="k">Authorization:</span> <span class="redact">••••••••</span>  <span class="c">← 写时脱敏</span>
+
+{
+  <span class="k">"amount"</span>: <span class="n">50000</span>,
+  <span class="k">"userId"</span>: <span class="s">"u_8f3a..."</span>,
+  <span class="k">"phone"</span>: <span class="s">"138****5678"</span>  <span class="c">← 脱敏</span>
+}
+              </div>
+            </div>
+
+            <div style="margin-top:12px;display:flex;gap:10px;font-size:11.5px;color:var(--tx-3)">
+              <span>响应体 2.4 MB <b style="color:var(--tx-2)">已截断显示前 64 KB</b>（完整报文已归档）</span>
+              <span class="grow"></span>
+              <span style="cursor:pointer;color:var(--accent)">打开完整报文 →</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 右栏 Copilot -->
+      <div class="copilot">
+        <div class="cp-head">
+          <span class="t">🤖 Copilot</span>
+          <span class="chip ok">检查点 ✓</span>
+          <span class="grow"></span>
+          <span class="chip">session-a3f2</span>
+        </div>
+
+        <div class="cp-body">
+          <div class="msg">
+            <div class="who">AI · 正在分析失败原因</div>
+            正在比对 #127 与 #128 的差异，定位 3 个新增失败…
+            <div class="steps">
+              <div class="done">读取 assert_result (run=128)</div>
+              <div class="done">关联原则 #12 金额上限</div>
+              <div>采样 orders.amount 分布</div>
+            </div>
+          </div>
+
+          <div class="card warn">
+            <div class="ct">⚠ 疑似断言期望值有误</div>
+            <div class="cb">
+              3 个新增失败都断言 <code style="font-family:var(--mono)">error.code == "AMOUNT_EXCEEDED"</code>，
+              但源码 <code style="font-family:var(--mono)">order.controller.ts:88</code> 实际返回的是数字 <code style="font-family:var(--mono)">500</code>。
+              可能是用例的期望值与实现不一致，而非代码回归。
+            </div>
+            <div class="csrc">↳ 无原则溯源 · 仅基于 Agent 推断 ⚠</div>
+            <div class="cbtns">
+              <button class="btn pri">采纳修正</button>
+              <button class="btn">编辑</button>
+              <button class="btn gh">拒绝</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="ct">建议：补充边界值 50001 的错误码断言</div>
+            <div class="cb">当前用例覆盖了 49999 / 50000 / 50001 三个边界，但只在 50000 上断言了错误码。</div>
+            <div class="csrc">↳ 原则#12 order.controller.ts:88 · 样本 orders.amount</div>
+            <div class="cbtns">
+              <button class="btn pri">采纳</button>
+              <button class="btn">编辑</button>
+              <button class="btn gh">拒绝</button>
+            </div>
+          </div>
+
+          <div class="msg" style="color:var(--tx-3);font-size:11.5px">
+            ⓘ 提示：无原则溯源的建议需人工逐条复核，不参与批量采纳。
+          </div>
+        </div>
+
+        <div class="cp-foot">
+          <div class="input">
+            <span class="ph">分析这 3 个失败的共同原因…</span>
+            <span class="kbd">⏎</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 状态栏 -->
+    <div class="statusbar">
+      <div class="sb"><span class="sb-dot run"></span> 运行中 #128</div>
+      <div class="sb">环境 dev</div>
+      <div class="sb">并发 1</div>
+      <div class="sb">当前 POST /orders/create · 金额=50001</div>
+      <div class="sb">事件 1,284 条</div>
+      <div class="grow" style="flex:1"></div>
+      <div class="sb">口径：排除出错</div>
+      <div class="sb">v0.1.0 · 设计稿</div>
+    </div>
+  </div>
+
+  <!-- 图例 -->
+  <div class="legend">
+    <h3>verdict 六态（颜色 + 图标双重编码，满足无障碍要求）</h3>
+    <div class="lg"><span class="vicon v-pass">✓</span> 通过（passed）</div>
+    <div class="lg"><span class="vicon v-deg">!</span> 降级（degraded）— 次要断言失败，不算失败</div>
+    <div class="lg"><span class="vicon v-fail">✗</span> 失败（failed）— 关键断言失败</div>
+    <div class="lg"><span class="vicon v-err">⌁</span> 出错（errored）— <b style="color:var(--tx)">未能完成测试</b>，不算被测对象的错</div>
+    <div class="lg"><span class="vicon v-flk">◐</span> 不稳定（flaky）— 多次尝试结果不一致</div>
+    <div class="lg"><span class="vicon v-skip">–</span> 跳过（skipped）</div>
+
+    <h3 style="margin-top:10px">设计要点</h3>
+    <div class="lg">· 结果表采用虚拟滚动（<code style="font-family:var(--mono)">@tanstack/react-virtual</code>），支持实时追加（556 项）</div>
+    <div class="lg">· 实时性来自主进程 IPC 推送 + 增量应用 + 每 5 秒全量对账</div>
+    <div class="lg">· 新失败用橙色 <span class="newtag">NEW</span> 标记并置顶（对比上次运行的 diff）</div>
+    <div class="lg">· 每条断言可追问到 <code style="font-family:var(--mono)">file:line</code> 与真实样本</div>
+    <div class="lg">· 无溯源建议黄边警示，不参与批量采纳</div>
+    <div class="lg">· 凭据写时脱敏（<span class="redact">••••••••</span>），不进日志/导出</div>
+    <div class="lg">· 状态栏常驻显示并发度（影响结果解读的关键语境）</div>
+  </div>
+</div>
+</body>
+</html>
