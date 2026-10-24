@@ -134,12 +134,15 @@ export function finishRun(deps: EventLogDeps, scope: ProjectScope, runId: number
     const chain = recomputeChainHash(deps.db, runId);
     const events = readEvents(deps.db, runId, 0, 10_000_000);
     const judgment = judgeRun(runId, events);
+    // 终态不变量：投影与最终判定完全一致（live 投影在运行中允许瞬态，
+    // 例如进行中的 entry 显示 errored——finish 时以判定为准全量重建）
+    const rebuilt = rebuildAll(deps, runId);
     finalizeRun(deps.db, runId, {
       status,
       finishedAtMs: deps.clock.nowMs(),
       eventCount: chain.count,
       chainHash: chain.hash,
-      counters: judgment.counters,
+      counters: rebuilt.counters,
     });
   });
   return requireRun(deps.db, scope, runId);

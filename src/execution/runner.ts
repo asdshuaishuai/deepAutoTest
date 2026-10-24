@@ -52,6 +52,8 @@ export interface ExecutePlanOptions {
 
 export interface ExecuteResult {
   executed: number;
+  /** 因 run:cancel 停止启动新 entry（未开始的 entry 判 skipped 由 run_finished(cancelled) 语义决定）。 */
+  cancelled: boolean;
 }
 
 export async function executePlan(opts: ExecutePlanOptions): Promise<ExecuteResult> {
@@ -60,34 +62,79 @@ export async function executePlan(opts: ExecutePlanOptions): Promise<ExecuteResu
     ? new Agent({ connect: { rejectUnauthorized: false } })
     : undefined;
 
-  const groups: string[] = [];
+  // 分组 + db_check 波次（03 §3.3：数据库侧证对并发写入敏感 → 慢波次且彼此串行）
+  const normalGroups: PlanEntry[][] = [];
+  const dbGroups: PlanEntry[][] = [];
   const byGroup = new Map<string, PlanEntry[]>();
   for (const entry of plan.entries) {
-    if (!byGroup.has(entry.group)) {
-      byGroup.set(entry.group, []);
-      groups.push(entry.group);
-    }
+    if (!byGroup.has(entry.group)) byGroup.set(entry.group, []);
     byGroup.get(entry.group)!.push(entry);
   }
+  for (const entries of byGroup.values()) {
+    const hasDb = entries.some((e) => e.steps.some((st) => st.kind === 'db_check'));
+    (hasDb ? dbGroups : normalGroups).push(entries);
+  }
 
-  let cursor = 0;
   let executed = 0;
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      const idx = cursor++;
-      if (idx >= groups.length) return;
-      if (opts.signal?.aborted) return;
-      for (const entry of byGroup.get(groups[idx]!)!) {
-        if (opts.signal?.aborted) return;
-        await runEntry(opts, dispatcher, entry);
-        executed += 1;
+  let cancelled = false;
+  let pauseAnnounced = false;
+  const startedEntries = new Set<string>();
+  const cursor = { normal: 0, db: 0 };
+  const controlOf = async (): Promise<{ cancelled: boolean; paused: boolean }> => {
+    const c = await opts.kernel.call('run:control', { runId: opts.runId });
+    return { cancelled: c.cancelled, paused: c.paused };
+  };
+  const runWave = async (groups: PlanEntry[][], lanes: number): Promise<void> => {
+    let cursorLocal = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const idx = cursorLocal++;
+        if (idx >= groups.length) return;
+        for (const entry of groups[idx]!) {
+          for (;;) {
+            if (opts.signal?.aborted) {
+              cancelled = true;
+              return;
+            }
+            const ctrl = await controlOf();
+            if (ctrl.cancelled) {
+              cancelled = true;
+              return;
+            }
+            if (!ctrl.paused) break;
+            if (!pauseAnnounced) {
+              pauseAnnounced = true;
+              await append(opts, [{ kind: 'run_paused', entryId: null, by: 'user' }]);
+            }
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          if (pauseAnnounced) {
+            // 恢复即事件（03 §6.1：人工动作是日志的一部分）
+            pauseAnnounced = false;
+            await append(opts, [{ kind: 'run_resumed', entryId: null, by: 'user' }]);
+          }
+          startedEntries.add(entry.entryId);
+          await runEntry(opts, dispatcher, entry);
+          executed += 1;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(lanes, groups.length)) }, () => worker()));
+  };
+
+  try {
+    // 波次一：常规组并发；波次二：db_check 组串行（lane=1）
+    await runWave(normalGroups, plan.concurrency);
+    if (!cancelled && dbGroups.length > 0) await runWave(dbGroups, 1);
+    if (cancelled) {
+      // 取消语义（03 §5.5）：未开始的 entry 标 skipped —— 补 entry_started 锚点，
+      // 判定由 run_finished(cancelled) 承担（judge：started 无 finished + cancelled → skipped）
+      const unstarted = plan.entries.filter((e) => !startedEntries.has(e.entryId));
+      if (unstarted.length > 0) {
+        await append(opts, unstarted.map((e) => ({ kind: 'entry_started', entryId: e.entryId, caseId: e.caseId, paramRowLabel: e.paramRowLabel, intent: e.intent })));
       }
     }
-  };
-  const lanes = Math.max(1, Math.min(plan.concurrency, groups.length));
-  try {
-    await Promise.all(Array.from({ length: lanes }, () => worker()));
-    return { executed };
+    return { executed, cancelled };
   } finally {
     if (dispatcher !== undefined) await dispatcher.close().catch(() => {});
   }

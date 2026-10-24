@@ -1,7 +1,7 @@
 # deepAutoTest
 
 > 源码驱动的 API 自动化测试工作台 · 设计稿 v1.0
-> **状态：引擎层全部落地（基座/分析/合成/执行/PRD/UI 测试/采样/db_check/Agent），159 项验收测试（W1 已验证：libfx 子进程加载 + native 后端 + refused 失败形态）。**
+> **状态：引擎层全部落地（基座/分析/合成/执行/PRD/UI 测试/采样/db_check/Agent/运行生命周期），169 项验收测试（W1 已验证：libfx 子进程加载 + native 后端 + refused 失败形态）。**
 > **UI 壳（桌面应用）是独立的另一个项目**，不在本仓库——引擎层只暴露 `kernel.call` 单一入口，任何壳（webview 桌面 / CLI / 未来形态）都是它的传输适配层。
 > 独立项目，与 deepStudio 共享哲学，不共享代码。
 > 前身设计稿名 `autoTestStudio`，本稿更名为 **deepAutoTest**。
@@ -117,7 +117,7 @@ deepAutoTest 不依赖 deepStudio 的任何代码、产物或运行时。两者�
 
 ```bash
 npm install
-npm test        # 159 项验收测试（Vitest；含真浏览器 UI / 真库采样 / 真子进程 Agent probe）
+npm test        # 169 项验收测试（Vitest；含真浏览器 UI / 真库采样 / 真子进程 Agent probe / 生命周期）
 npm run demo    # 基座 headless 全生命周期（提议→人机门→留痕→判定→重建→重判→脱敏）
 npm run demo:exec # 执行层全闭环（mock 服务 + 真实 HTTP）
 npm run demo:e2e  # ★ 全链路（源码→原则→用例→执行→反馈）
@@ -289,6 +289,24 @@ npm run demo:agent                                                    # 演示�
 ```
 
 > 已知边界：真实凭据的完整流式 + checkpoint 往返未实测（无凭据；失败形态已实证不伤宿主）。libfx 工具桥的具体 tools 契约在首次真实运行时对齐（桥协议两端已就位）。
+
+---
+
+## 运行生命周期收尾（已实现 · 03 §5.5/§7.3 + 04 §7 全兑现）
+
+| 能力 | 内容 |
+|---|---|
+| 取消 | `run:cancel` → 停止启动新 entry（in-flight 允许完成）；未开始 entry 补 `entry_started` 锚点 → 判定 `skipped`；`run:finish(cancelled)`。**终态不变量：finish 时投影全量重建，与最终判定完全一致** |
+| 暂停/恢复 | `run:pause` / `run:resume`（03 §6.1 人工动作即事件：`run_paused` / `run_resumed` 落库） |
+| 续跑 | `buildResumePlan(kernel, pid, runId)`：从 `run_started.planSnapshot` 构建（**seed 不变**），跳过「已完成」（entry_finished）的 entry——被取消跳过的正是重跑对象；产出新 run（append-only：新事实写新日志） |
+| db_check 波次 | 常规组并发先行，db_check 组**第二波串行**（03 §3.3：侧证不与写入并发） |
+| 自足导出 | `run:export` **json**（策略快照 + 事件计数 + chainHash + 三口径通过率——脱离工具可判读）/ **markdown**（口径显式标注、失败/flaky/豁免清单）/ **csv**（行级） |
+| 通过率口径 | `run:passRate` `strict / lenient / excluding_errored`（默认排除 errored：环境问题不算被测头上，04 §4.2） |
+| 进度 ETA | `run:eta`：已完成中位耗时外推剩余（无样本诚实返回 null） |
+| 跨运行稳定性 | `metrics:stability`：窗口内 flaky 聚合榜（runs/passes/flakyRuns/最近判定，04 §3.4） |
+| artifact 保留 | `run:applyRetention`：**失败/出错永久保留**（排查依据），通过过期的清除（默认 90 天，含文件级删除）；引用扫描自事件 payload |
+
+> 运行控制是进程内状态（纯 JS Map，kernel 保持零依赖）：cancel/pause 只对本进程在跑的运行有效——与"kernel 持有真相、执行层持有生命"的分层一致。
 
 
 ## 待验证项（阻断 M1 的未知）

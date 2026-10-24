@@ -5,7 +5,7 @@
  * 本模块自身完成"写文件 + 插行"，调用方随后在事件里引用返回的 ref。
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Db } from '../db.ts';
@@ -102,4 +102,55 @@ export function getArtifact(db: Db, artifactsDir: string, sha256: string): Store
 
 export function hashContent(content: Buffer | string): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+/* ─────────────── 保留策略支撑（04 §7.1） ─────────────── */
+
+export interface RunArtifactRef {
+  sha256: string;
+  entryId: string;
+  /** 引用来源事件（response_received / ui_action）。 */
+  kind: string;
+}
+
+/** 扫一次 run 的事件 payload，收集全部 artifact 引用（bodyRef / screenshotRef）。 */
+export function refsOfRun(db: Db, runId: number): RunArtifactRef[] {
+  // LIKE 预过滤 + JSON 解析：事件 payload 是唯一引用来源（03 §6.1）
+  const rows = db
+    .prepare("SELECT kind, entry_id, payload FROM run_event WHERE run_id = ? AND (payload LIKE '%\"bodyRef\"%' OR payload LIKE '%\"screenshotRef\"%')")
+    .all(runId) as { kind: string; entry_id: string | null; payload: string }[];
+  const out: RunArtifactRef[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(row.payload) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    for (const key of ['bodyRef', 'screenshotRef'] as const) {
+      const ref = payload[key];
+      if (typeof ref === 'string' && ref.length > 0 && !seen.has(ref)) {
+        seen.add(ref);
+        out.push({ sha256: ref, entryId: row.entry_id ?? '', kind: row.kind });
+      }
+    }
+  }
+  return out;
+}
+
+/** 删除 artifact（含文件）。返回是否真的删了。 */
+export function deleteArtifact(db: Db, artifactsDir: string, sha256: string): boolean {
+  const row = db.prepare('SELECT storage, file_path FROM artifact WHERE sha256 = ?').get(sha256) as
+    | { storage: string; file_path: string | null }
+    | undefined;
+  if (row === undefined) return false;
+  if (row.storage === 'file' && row.file_path !== null) {
+    try {
+      unlinkSync(join(artifactsDir, row.file_path));
+    } catch {
+      /* 文件已缺：仍删行 */
+    }
+  }
+  return db.prepare('DELETE FROM artifact WHERE sha256 = ?').run(sha256).changes > 0;
 }

@@ -11,3 +11,4 @@ export { parseRefs, resolveTemplate, validateRefs, maskTemplate, type TemplateCo
 export { jsonPath, resolveTarget, evaluateAssert, type ObservedResponse, type AssertEvaluation } from './evaluate.ts';
 export { runScript, type SandboxInput, type ScriptOutcome } from './sandbox.ts';
 export { executePlan, type ExecutePlanOptions, type ExecuteResult, type SecretProvider } from './runner.ts';
+export { buildResumePlan, type ResumeBuildResult } from './resume.ts';
