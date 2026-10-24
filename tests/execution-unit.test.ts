@@ -92,6 +92,23 @@ describe('断言求值', () => {
     expect(evaluateAssert('matches', '^AMOUNT_', 'AMOUNT_EXCEEDED', true).passed).toBe(true);
   });
 
+  it('ne 严格取反 eq，且数值归一化仅认纯十进制字面量', () => {
+    // 表驱动：eq 与 ne 对同一对操作数必须恰好一真一假（P4 判定自洽）。
+    const cases: Array<{ actual: unknown; expected: string; eq: boolean }> = [
+      { actual: 1, expected: '1.0', eq: true }, // 纯十进制 → 数值比较
+      { actual: '1000', expected: '1e3', eq: false }, // 科学计数法 → 字符串比较（语义收紧点）
+      { actual: '16', expected: '0x10', eq: false }, // 十六进制 → 字符串比较（语义收紧点）
+      { actual: 1, expected: '1', eq: true },
+      { actual: 'abc', expected: 'abd', eq: false },
+    ];
+    for (const c of cases) {
+      const eq = evaluateAssert('eq', c.expected, c.actual, true).passed;
+      const ne = evaluateAssert('ne', c.expected, c.actual, true).passed;
+      expect(eq, `eq(${JSON.stringify(c.actual)}, ${c.expected})`).toBe(c.eq);
+      expect(ne, `ne(${JSON.stringify(c.actual)}, ${c.expected})`).toBe(!c.eq);
+    }
+  });
+
   it('exists / type_is', () => {
     expect(evaluateAssert('exists', undefined, 42, true).passed).toBe(true);
     expect(evaluateAssert('exists', undefined, undefined, false).passed).toBe(false);

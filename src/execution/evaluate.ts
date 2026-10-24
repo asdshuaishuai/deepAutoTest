@@ -53,13 +53,28 @@ export interface AssertEvaluation {
   actual: string;
 }
 
+/**
+ * 仅纯十进制字面量（trim 后）才参与数值比较。
+ * 语义收紧说明（相对旧实现 Number() 全量强转）：'0x10' / '1e3' / 'Infinity'
+ * 等不再被当作数值，一律走字符串比较。
+ */
+const DECIMAL_LITERAL = /^[+-]?(\d+(\.\d+)?|\.\d+)$/;
+
+function numeric(v: string): number | null {
+  const s = v.trim();
+  return DECIMAL_LITERAL.test(s) ? Number(s) : null;
+}
+
+/** eq 的共享判定。ne = 对它取反，保证 eq/ne 对同一对操作数恰好一真一假。 */
+function compareEq(actual: string, expected: string | undefined): AssertEvaluation {
+  const a = numeric(actual);
+  const b = numeric(expected ?? '');
+  if (a !== null && b !== null) return { passed: a === b, actual };
+  return { passed: actual === expected, actual };
+}
+
 export function evaluateAssert(op: AssertOp, expected: string | undefined, actualValue: unknown, found: boolean): AssertEvaluation {
   const actual = stringify(actualValue);
-
-  const numeric = (v: string): number | null => {
-    const n = Number(v);
-    return v.trim() !== '' && !Number.isNaN(n) ? n : null;
-  };
 
   switch (op) {
     case 'exists':
@@ -72,14 +87,10 @@ export function evaluateAssert(op: AssertOp, expected: string | undefined, actua
       const type = actualValue === null ? 'null' : isArr ? 'array' : t === 'object' ? 'object' : t;
       return { passed: type === expected, actual: type };
     }
-    case 'eq': {
-      if (numeric(actual) !== null && numeric(expected ?? '') !== null) {
-        return { passed: numeric(actual) === numeric(expected ?? ''), actual };
-      }
-      return { passed: actual === expected, actual };
-    }
+    case 'eq':
+      return compareEq(actual, expected);
     case 'ne':
-      return { passed: actual !== expected, actual };
+      return { passed: !compareEq(actual, expected).passed, actual };
     case 'lt':
     case 'lte':
     case 'gt':

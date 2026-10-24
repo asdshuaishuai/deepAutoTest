@@ -21,7 +21,7 @@ import * as dbconnsRepo from './store/repos/dbconns.ts';
 import * as agentsRepo from './store/repos/agents.ts';
 import { decryptSecret, encryptSecret } from './store/secrets.ts';
 import { appendEvents, beginRun, finishRun, judgeRunFromDb, rebuildProjections, rejudgeRun, verifyIntegrity, type EventLogDeps, type IntegrityReport } from './domain/eventlog.ts';
-import { applyReview, applyEditsToDraft, type FieldEdit } from './domain/review.ts';
+import { applyReview, applyEditsToDraft, applyEditsToRoute, applyEditsToPrinciple, type FieldEdit } from './domain/review.ts';
 import { diffRuns } from './domain/diff.ts';
 import { bool, checkPolicy, enumOf, int, isObj, requireString } from './domain/validate.ts';
 import { defaultRedactOptions, redactDeep, type RedactOptions } from './domain/redact.ts';
@@ -102,10 +102,10 @@ export interface KernelMethods {
   'source:recordIndex': { req: { projectId: number; gitRef?: string | null; fileCount: number; frameworks?: string[] }; res: SourceIndexRecord };
   'route:proposeBatch': { req: { projectId: number; sourceIndexId: number; routes: unknown[]; proposedBy: string }; res: { inserted: number } };
   'route:list': { req: { projectId: number; status?: 'proposed' | 'adopted' | 'rejected' }; res: RouteCandidateRecord[] };
-  'route:review': { req: { projectId: number; routeId: number; action: 'adopt' | 'edit' | 'reject'; actor: string }; res: RouteCandidateRecord };
+  'route:review': { req: { projectId: number; routeId: number; action: 'adopt' | 'edit' | 'reject'; actor: string; edits?: FieldEdit[] }; res: RouteCandidateRecord };
   'principle:proposeBatch': { req: { projectId: number; principles: unknown[]; proposedBy: string }; res: { inserted: number } };
   'principle:list': { req: { projectId: number; status?: 'proposed' | 'adopted' | 'rejected' }; res: PrincipleRecord[] };
-  'principle:review': { req: { projectId: number; principleId: number; action: 'adopt' | 'edit' | 'reject'; actor: string }; res: PrincipleRecord };
+  'principle:review': { req: { projectId: number; principleId: number; action: 'adopt' | 'edit' | 'reject'; actor: string; edits?: FieldEdit[] }; res: PrincipleRecord };
   'metrics:coverage': {
     req: { projectId: number };
     res: { eligible: number; covered: number; uncovered: { routeId: number; method: string; path: string; confidence: string; framework: string }[] };
@@ -452,7 +452,14 @@ export function createKernel(options: KernelOptions): Kernel {
       if (record === undefined) throw new KernelError('not_found', `路由候选 ${routeId} 不在当前项目内`);
       const action = enumOf(o['action'], 'action', ['adopt', 'edit', 'reject'] as const);
       const actor = requireString(o['actor'], 'actor', 256);
-      const result = applyReview({ id: record.id, status: record.status }, action, actor, [], clock.nowMs());
+      const edits = validateEdits(o['edits']);
+      const result = applyReview({ id: record.id, status: record.status }, action, actor, edits, clock.nowMs());
+      if (action === 'edit') {
+        // P3 就地编辑（与 case:review 同构）：应用字段级 diff → 整体重校验 → 内容连留痕一起落库
+        const content = applyEditsToRoute(record, edits);
+        const draft = validateRouteDraft(content);
+        return sourcesRepo.applyRouteReviewWithContent(db, sc, routeId, result, draft);
+      }
       return sourcesRepo.applyRouteReview(db, sc, routeId, result);
     },
     'principle:proposeBatch': (p) => {
@@ -477,7 +484,14 @@ export function createKernel(options: KernelOptions): Kernel {
       if (record === undefined) throw new KernelError('not_found', `原则 ${principleId} 不在当前项目内`);
       const action = enumOf(o['action'], 'action', ['adopt', 'edit', 'reject'] as const);
       const actor = requireString(o['actor'], 'actor', 256);
-      const result = applyReview({ id: record.id, status: record.status }, action, actor, [], clock.nowMs());
+      const edits = validateEdits(o['edits']);
+      const result = applyReview({ id: record.id, status: record.status }, action, actor, edits, clock.nowMs());
+      if (action === 'edit') {
+        // P3 就地编辑（与 case:review 同构）：应用字段级 diff → 整体重校验 → 内容连留痕一起落库
+        const content = applyEditsToPrinciple(record, edits);
+        const draft = validatePrincipleDraft(content);
+        return sourcesRepo.applyPrincipleReviewWithContent(db, sc, principleId, result, draft);
+      }
       return sourcesRepo.applyPrincipleReview(db, sc, principleId, result);
     },
     'metrics:coverage': (p) => {
@@ -665,8 +679,12 @@ export function createKernel(options: KernelOptions): Kernel {
     },
     'run:resume': (p) => {
       const o = isObj(p) ? p : {};
-      void scope(o['projectId']); // 校验项目存在
-      controlOf(int(o['runId'], 'runId', 1)).paused = false;
+      const sc = scope(o['projectId']);
+      const runId = int(o['runId'], 'runId', 1);
+      // 归属校验与 run:pause 对齐（P5）：项目身份只能作用于自己项目内的运行，
+      // 不存在的 runId 也不得返回假成功
+      if (runsRepo.getRun(db, sc, runId) === undefined) throw new KernelError('not_found', `运行 ${runId} 不在当前项目内`);
+      controlOf(runId).paused = false;
       return { resumed: true };
     },
     'run:control': (p) => {

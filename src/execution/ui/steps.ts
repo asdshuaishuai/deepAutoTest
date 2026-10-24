@@ -5,6 +5,9 @@
  * 不产结论。ui_see 是断言 → assert_evaluated → verdict 纯函数照常工作
  * （UI 用例免费获得 failed/degraded/flaky 语义）。
  *
+ * 模板：ui_navigate.url / ui_fill.text 支持 {{env|var|secret|param.x}}——入口先经
+ * ctx.resolve 解析（与 HTTP 步骤同一 ctx），再做同源校验/驱动动作；解析失败 → plan_invalid。
+ *
  * 驱动不可用 → ui_driver_unavailable（诚实拒绝，不静默；run 内其它用例继续）。
  */
 
@@ -22,6 +25,8 @@ export interface UiStepContext {
   baseUrl: string;
   defaultTimeoutMs: number;
   signal: { aborted: boolean } | undefined;
+  /** 模板解析（与 HTTP 步骤同一 ctx）：{{env|var|secret|param.x}} → 运行期值；未定义引用抛错。 */
+  resolve: (text: string) => string;
 }
 
 export type UiStepOutcome =
@@ -40,6 +45,16 @@ export async function executeUiStep(
   const timeoutMs = stepTimeout(step) ?? ctx.defaultTimeoutMs;
   const mask = (s: string): string => maskSecrets(s, secrets);
 
+  // 入口先解析模板字段（{{param.x}}/{{secret.y}}/{{env.x}}；存在性已由编译期 validateRefs 保证）：
+  // 解析失败 → plan_invalid（诚实拒绝），绝不把 {{...}} 字面量带进驱动或同源校验。
+  const resolveField = (text: string): { ok: true; value: string } | { ok: false; detail: string } => {
+    try {
+      return { ok: true, value: ctx.resolve(text) };
+    } catch (err) {
+      return { ok: false, detail: String((err as Error).message ?? err).slice(0, 4000) };
+    }
+  };
+
   const actionEvent = (detail: string | null, screenshotRef: string | null, durationMs: number, target: string | null = null): RunEventInput => ({
     kind: 'ui_action',
     entryId: ctx.entryId,
@@ -55,8 +70,11 @@ export async function executeUiStep(
   try {
     switch (step.kind) {
       case 'ui_navigate': {
-        // 运行期同源校验（模板变量此时才有值；导航是 SSRF 经典载体）
-        const url = step.url.startsWith('/') ? ctx.baseUrl + step.url : step.url;
+        // 先解析模板再同源校验（模板值运行期才有值；导航是 SSRF 经典载体）
+        const tpl = resolveField(step.url);
+        if (!tpl.ok) return { ok: false, reason: 'plan_invalid', detail: tpl.detail, events: [] };
+        const rawUrl = tpl.value;
+        const url = rawUrl.startsWith('/') ? ctx.baseUrl + rawUrl : rawUrl;
         const resolved = new URL(url);
         if (resolved.origin !== new URL(ctx.baseUrl).origin) {
           return { ok: false, reason: 'plan_invalid', detail: `导航目标 ${resolved.origin} 不在环境基址域内`, events: [] };
@@ -69,10 +87,13 @@ export async function executeUiStep(
         await driver.click(step.selector, timeoutMs);
         return { ok: true, events: [actionEvent('click', null, elapsed(t0), step.selector)], failedAssert: false };
 
-      case 'ui_fill':
-        await driver.fill(step.selector, step.text, timeoutMs);
-        // 填写的文本可能是凭据 → 事件里掩码
-        return { ok: true, events: [actionEvent(`fill "${mask(step.text).slice(0, 100)}"`, null, elapsed(t0), step.selector)], failedAssert: false };
+      case 'ui_fill': {
+        // 填写文本先解析模板（如 {{secret.x}} 取真值进输入框）；事件里掩码
+        const tpl = resolveField(step.text);
+        if (!tpl.ok) return { ok: false, reason: 'plan_invalid', detail: tpl.detail, events: [] };
+        await driver.fill(step.selector, tpl.value, timeoutMs);
+        return { ok: true, events: [actionEvent(`fill "${mask(tpl.value).slice(0, 100)}"`, null, elapsed(t0), step.selector)], failedAssert: false };
+      }
 
       case 'ui_press':
         await driver.press(step.key);

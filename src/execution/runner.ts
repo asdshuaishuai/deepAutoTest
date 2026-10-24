@@ -20,6 +20,7 @@ import type { Kernel } from '../kernel/service.ts';
 import type { EnvRecord, RunEventInput, StepErrorReason } from '../kernel/shared/domain.ts';
 import { checkUrl } from './urlguard.ts';
 import { parseRefs, resolveTemplate } from './template.ts';
+import { templateTextsOf } from './plan-compiler.ts';
 import { evaluateAssert, resolveTarget, type ObservedResponse } from './evaluate.ts';
 import { runScript } from './sandbox.ts';
 import { executeUiStep } from './ui/steps.ts';
@@ -156,11 +157,11 @@ async function runEntry(opts: ExecutePlanOptions, dispatcher: Dispatcher | undef
   const maxAttempts = plan.policy.retry.maxAttempts;
   const retryOn = plan.policy.retry.on;
 
-  // 提前收集本 entry 需要的 secret 名，一次性取值（不逐请求取）
+  // 提前收集本 entry 需要的 secret 名，一次性取值（不逐请求取）。
+  // 清单与编译期 validateRefs 同源（templateTextsOf）：HTTP 字段 + UI 字段（ui_navigate.url / ui_fill.text）
   const secretNames = new Set<string>();
   for (const step of entry.steps) {
-    if (step.kind !== 'request') continue;
-    for (const text of [step.url, step.body ?? '', ...Object.values(step.headers ?? {})]) {
+    for (const text of templateTextsOf(step)) {
       for (const ref of parseRefs(text)) {
         if (ref.ns === 'secret') secretNames.add(ref.name);
       }
@@ -191,7 +192,21 @@ async function runEntry(opts: ExecutePlanOptions, dispatcher: Dispatcher | undef
   try {
     for (;;) {
       attempt += 1;
-      const outcome = await runAttempt(opts, dispatcher, entry, secrets, uiState);
+      let outcome: AttemptOutcome;
+      try {
+        outcome = await runAttempt(opts, dispatcher, entry, secrets, uiState);
+      } catch (err) {
+        // 单 entry 故障不炸场（03 §5.4：脚本/观测故障判 errored，而非整个 run 卡死）。
+        // 取消照旧向上传播；其余异常折算为本 entry 的 errored 观测后返回——
+        // 抛错批经 appendEvents 先验后写已整体回滚，这里补 step_errored + entry_finished
+        // 不会与已落库终态相撞；兜底追加自身再失败才向上抛。
+        if ((err as Error).name === 'AbortError' || opts.signal?.aborted) throw err;
+        await append(opts, [
+          { kind: 'step_errored', entryId: entry.entryId, stepSeq: null, stepKind: null, reason: 'plan_invalid', detail: detailOf(err) },
+          { kind: 'entry_finished', entryId: entry.entryId, attempts: attempt, durationMs: Math.round(performance.now() - startedAt) },
+        ]);
+        return;
+      }
       // 重试候选：step 错误（connect_failed/超时…）与 attempt 级原因（http_5xx/断言失败）同一决策（03 §5.3）
       const retryCandidate = outcome.stepError ?? outcome.retryReason;
       if (attempt < maxAttempts && shouldRetry(retryOn, retryCandidate)) {
@@ -416,7 +431,8 @@ async function runAttempt(
             stepSeq: stepIndex(entry, step),
             severity: step.severity ?? 'major',
             expected: 'truthy',
-            actual: JSON.stringify(outcome.returned),
+            // 归一为字符串：JSON.stringify(undefined) 是 undefined，写入门会拒（曾是崩场源）
+            actual: String(JSON.stringify(outcome.returned) ?? String(outcome.returned)),
             passed: false,
             principleId: null,
             sourceFile: null,
@@ -492,6 +508,8 @@ async function runAttempt(
           baseUrl: opts.env.baseUrl,
           defaultTimeoutMs: opts.plan.policy.timeoutMs,
           signal: opts.signal === undefined ? undefined : { get aborted(): boolean { return opts.signal!.aborted; } },
+          // 与 HTTP 步骤同一模板 ctx（env/vars/secrets/params）：UI 字段运行期解析
+          resolve: (text: string): string => resolveTemplate(text, ctx),
         };
         const outcome = await executeUiStep(uiCtx, uiState.driver, step as UiStepSpec, stepIndex(entry, step), assertSeq, secrets);
         if (outcome.ok) {

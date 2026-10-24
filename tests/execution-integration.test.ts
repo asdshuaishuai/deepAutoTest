@@ -8,6 +8,7 @@ import { createServer, type Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { compilePlan } from '../src/execution/plan-compiler.ts';
 import { executePlan } from '../src/execution/runner.ts';
+import type { UiDriver, UiDriverFactory } from '../src/execution/ui/driver.ts';
 import type { RunEventInput } from '../src/kernel/shared/domain.ts';
 import { defaultRunPolicy, type RunPolicy, type TestCaseRecord } from '../src/kernel/shared/domain.ts';
 import { beginRun, setupProject, type SetupResult } from './helpers.ts';
@@ -331,6 +332,137 @@ describe('执行引擎（undici ↔ kernel）', () => {
       { id: 's1', seq: 1, kind: 'assert', config: { target: { kind: 'body_json', path: 'data.total' }, op: 'eq', expected: '1', severity: 'major' } },
     ]);
     const runId = await runIt(s, envRec, [c], defaultRunPolicy());
+    const results = await s.kernel.call('run:results', { projectId: s.projectId, runId });
+    expect(results.entries[0]!.verdict).toBe('passed');
+    s.kernel.close();
+  });
+
+  it('script 无显式 return 不再崩场：折算 failed 断言（actual="undefined"），后续 entry 照常执行', async () => {
+    const s = await setupProject();
+    const envRec = await mkEnv(s);
+    // 无 return 的脚本：truthy 检查折算为 failed 断言（曾经 actual=undefined 被写入门拒 → 崩场）
+    const noReturn = await adoptedCase(s, [
+      { id: 's0', seq: 0, kind: 'request', config: { method: 'GET', url: '/orders' } },
+      { id: 's1', seq: 1, kind: 'script', config: { code: 'if (response.status !== 200) { throw new Error("非 200") }' } },
+    ]);
+    const after = await adoptedCase(s, [
+      { id: 's0', seq: 0, kind: 'request', config: { method: 'GET', url: '/orders' } },
+      { id: 's1', seq: 1, kind: 'assert', config: { target: { kind: 'status' }, op: 'eq', expected: '200', severity: 'major' } },
+    ]);
+    const runId = await runIt(s, envRec, [noReturn, after], defaultRunPolicy());
+
+    const results = await s.kernel.call('run:results', { projectId: s.projectId, runId });
+    const byCase = new Map(results.entries.map((e: { caseId: number; verdict: string }) => [e.caseId, e.verdict]));
+    expect(byCase.get(noReturn.id)).toBe('failed'); // 无 return = 断言失败，不是崩场
+    expect(byCase.get(after.id)).toBe('passed'); // 剩余 entry 仍执行
+
+    const evs = (await s.kernel.call('run:events', { projectId: s.projectId, runId })) as RunEventInput[];
+    const scriptAssert = evs.find((e) => e.kind === 'assert_evaluated' && e.entryId === `${noReturn.id}#0`) as unknown as { actual: string; passed: boolean } | undefined;
+    expect(scriptAssert?.actual).toBe('undefined');
+    expect(scriptAssert?.passed).toBe(false);
+
+    // run 层照常可用：显式口径的通过率 + 完整性校验
+    const rate = await s.kernel.call('run:passRate', { projectId: s.projectId, runId, basis: 'strict' });
+    expect(rate).toMatchObject({ numerator: 1, denominator: 2, rate: 0.5 });
+    const verify = await s.kernel.call('run:verify', { projectId: s.projectId, runId });
+    expect(verify.ok).toBe(true);
+    s.kernel.close();
+  });
+
+  it('写入门拒收某批观测时不再炸场：该 entry 折算 errored（补 step_errored+entry_finished），后续 entry 照常执行', async () => {
+    const s = await setupProject();
+    const envRec = await mkEnv(s);
+    const boom = await adoptedCase(s, [
+      { id: 's0', seq: 0, kind: 'request', config: { method: 'GET', url: '/orders' } },
+      { id: 's1', seq: 1, kind: 'script', config: { code: 'if (response.status !== 200) { throw new Error("非 200") }' } },
+    ]);
+    const after = await adoptedCase(s, [{ id: 's0', seq: 0, kind: 'request', config: { method: 'GET', url: '/orders' } }]);
+    const policy = defaultRunPolicy();
+    const plan = await compilePlan({ cases: [boom, after], env: envRec as never, policy, seed: 7, nowMs: 0 });
+    const { runId } = await s.kernel.call('run:begin', { projectId: s.projectId, envId: envRec.id, policy, seed: 7, plan });
+
+    // 注入门故障：含 assert_evaluated 的批次写入即抛（模拟写入门故障），其余调用透传
+    const guarded = {
+      call: async (op: string, params: unknown) => {
+        if (op === 'run:appendEvents' && JSON.stringify(params).includes('"assert_evaluated"')) {
+          throw new Error('simulated gate outage');
+        }
+        return s.kernel.call(op as never, params as never);
+      },
+    };
+    await executePlan({ kernel: guarded as never, projectId: s.projectId, runId, plan, env: envRec as never });
+    await s.kernel.call('run:finish', { projectId: s.projectId, runId, status: 'completed' });
+
+    const results = await s.kernel.call('run:results', { projectId: s.projectId, runId });
+    const byCase = new Map(results.entries.map((e: { caseId: number; verdict: string }) => [e.caseId, e.verdict]));
+    expect(byCase.get(boom.id)).toBe('errored'); // 折算 errored，不是无终态孤儿
+    expect(byCase.get(after.id)).toBe('passed'); // 崩场不传染后续 entry
+
+    const evs = (await s.kernel.call('run:events', { projectId: s.projectId, runId })) as RunEventInput[];
+    const stepErr = evs.find((e) => e.kind === 'step_errored' && e.entryId === `${boom.id}#0`) as unknown as { reason: string; detail: string } | undefined;
+    expect(stepErr?.reason).toBe('plan_invalid');
+    expect(stepErr?.detail).toContain('simulated gate outage');
+    expect(evs.some((e) => e.kind === 'entry_finished' && e.entryId === `${boom.id}#0`)).toBe(true);
+    s.kernel.close();
+  });
+
+  it('UI 步骤模板变量与 secret 全链路：{{param}}/{{secret}} 解析进驱动、secret 恰取一次、事件掩码', async () => {
+    const s = await setupProject();
+    const envRec = await mkEnv(s, { secretNames: ['apiToken'] });
+    const c = await adoptedCase(
+      s,
+      [
+        { id: 's0', seq: 0, kind: 'ui_navigate', config: { url: '/login?u={{param.username}}' } },
+        { id: 's1', seq: 1, kind: 'ui_fill', config: { selector: '#password', text: '{{secret.apiToken}}' } },
+      ],
+      [{ label: 'baseline', values: { username: 'alice' }, intent: 'baseline' }],
+    );
+    const policy = defaultRunPolicy();
+    const plan = await compilePlan({ cases: [c], env: envRec as never, policy, seed: 7, nowMs: 0 });
+    const { runId } = await s.kernel.call('run:begin', { projectId: s.projectId, envId: envRec.id, policy, seed: 7, plan });
+
+    const got: { gotos: string[]; fills: string[] } = { gotos: [], fills: [] };
+    let secretCalls = 0;
+    const driver: UiDriver = {
+      goto: async (u) => { got.gotos.push(u); },
+      click: async () => {},
+      fill: async (_selector, text) => { got.fills.push(text); },
+      press: async () => {},
+      waitFor: async () => {},
+      textOf: async () => null,
+      bodyText: async () => '',
+      screenshot: async () => Buffer.from('fake-png'),
+      close: async () => {},
+    };
+    const factory: UiDriverFactory = { available: () => true, unavailableReason: () => '', create: async () => driver };
+    await executePlan({
+      kernel: s.kernel,
+      projectId: s.projectId,
+      runId,
+      plan,
+      env: envRec as never,
+      secrets: (n) => {
+        if (n === 'apiToken') {
+          secretCalls += 1;
+          return SECRET_VALUE;
+        }
+        return undefined;
+      },
+      uiDriver: factory,
+    });
+    await s.kernel.call('run:finish', { projectId: s.projectId, runId, status: 'completed' });
+
+    // driver 收到的是解析后的字符串，不是 {{...}} 字面量
+    expect(got.gotos).toEqual([`${envRec.baseUrl}/login?u=alice`]);
+    expect(got.fills).toEqual([SECRET_VALUE]);
+    expect(secretCalls).toBe(1); // 每 entry 恰取一次
+
+    // 事件里不出现 secret 明文（掩码后落库）
+    const raw = s.kernel.db.prepare('SELECT payload FROM run_event WHERE run_id = ?').all(runId) as { payload: string }[];
+    const all = raw.map((r) => r.payload).join('\n');
+    expect(all).not.toContain(SECRET_VALUE);
+    expect(all).toContain('<secret>'); // fill 事件的 detail 已掩码
+
     const results = await s.kernel.call('run:results', { projectId: s.projectId, runId });
     expect(results.entries[0]!.verdict).toBe('passed');
     s.kernel.close();

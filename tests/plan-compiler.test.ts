@@ -157,4 +157,34 @@ describe('计划编译器', () => {
     expect(JSON.stringify(plan)).not.toContain('sk-'); // 无值可泄
     expect(JSON.stringify(plan)).toContain('secret.apiToken'); // 只有模板引用
   });
+
+  it('UI 步骤模板字段同受 validateRefs 约束：未声明引用 → template_ref_unknown；声明后通过', async () => {
+    // ui_navigate.url 引用未声明的 param → 拒绝（与 HTTP 步骤同一错误码约定）
+    await expect(
+      compile([caseOf({ steps: [{ id: 's', seq: 0, kind: 'ui_navigate', config: { url: '/login?u={{param.nope}}' } }] })]),
+    ).rejects.toMatchObject({ code: 'template_ref_unknown' });
+    // ui_fill.text 引用未声明的 secret → 同样拒绝
+    await expect(
+      compile([
+        caseOf({
+          steps: [
+            { id: 's', seq: 0, kind: 'ui_navigate', config: { url: '/login' } },
+            { id: 's1', seq: 1, kind: 'ui_fill', config: { selector: '#password', text: '{{secret.nope}}' } },
+          ],
+        }),
+      ]),
+    ).rejects.toMatchObject({ code: 'template_ref_unknown' });
+    // 声明后（参数行含 username、env 声明 apiToken）→ 编译通过，family=ui
+    const ok = await compile([
+      caseOf({
+        steps: [
+          { id: 's', seq: 0, kind: 'ui_navigate', config: { url: '/login?u={{param.username}}' } },
+          { id: 's1', seq: 1, kind: 'ui_fill', config: { selector: '#password', text: '{{secret.apiToken}}' } },
+        ],
+        params: { kind: 'single', rows: [{ label: 'baseline', values: { username: 'alice' }, intent: 'baseline' }] },
+      }),
+    ]);
+    expect(ok.entries[0]!.family).toBe('ui');
+    expect(JSON.stringify(ok)).toContain('secret.apiToken'); // 只有名字，无值
+  });
 });

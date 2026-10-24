@@ -89,6 +89,16 @@ export function appendEvents(deps: EventLogDeps, scope: ProjectScope, runId: num
     ).map((r) => r.entry_id),
   );
 
+  // entry 级终态守卫：entry_finished 之后的同一 entry（标注类除外）一律拒绝——
+  // 防止事后补写观测翻转已定格的 entry。查库 + 批内累积；批次原子性由「先验全批、后写入」保证。
+  const finishedEntryIds = new Set(
+    (
+      deps.db
+        .prepare("SELECT DISTINCT entry_id FROM run_event WHERE run_id = ? AND kind = 'entry_finished' AND entry_id IS NOT NULL")
+        .all(runId) as { entry_id: string }[]
+    ).map((r) => r.entry_id),
+  );
+
   for (const raw of inputs) {
     const input = validateRunEventInput(raw);
     if (finished && !ANNOTATION_KINDS.has(input.kind)) {
@@ -108,9 +118,18 @@ export function appendEvents(deps: EventLogDeps, scope: ProjectScope, runId: num
         throw new KernelError('case_not_in_project', `用例 ${input.caseId} 不在当前项目内（P5）`);
       }
       if (input.entryId === null) throw new KernelError('invalid_params', 'entry_started 必须带 entryId');
+      if (finishedEntryIds.has(input.entryId)) {
+        throw new KernelError('entry_already_finished', `entry ${input.entryId} 已 entry_finished（终态），不接受重复 entry_started`);
+      }
       knownEntries.add(input.entryId);
     } else if (input.entryId !== null && !knownEntries.has(input.entryId)) {
       throw new KernelError('entry_not_started', `entry ${input.entryId} 尚未 entry_started，不能接受 ${input.kind}`);
+    }
+    if (input.entryId !== null && finishedEntryIds.has(input.entryId) && !ANNOTATION_KINDS.has(input.kind)) {
+      throw new KernelError('entry_already_finished', `entry ${input.entryId} 已 entry_finished（终态），只接受标注类事件（收到 ${input.kind}）`);
+    }
+    if (input.kind === 'entry_finished' && input.entryId !== null) {
+      finishedEntryIds.add(input.entryId);
     }
   }
 
@@ -246,7 +265,13 @@ function writeLifecycleEvent(deps: EventLogDeps, runId: number, input: RunEventI
 
 function writeNormalEvent(deps: EventLogDeps, runId: number, input: RunEventInput): RunEvent {
   const nextSeq = nextSeqFor(deps.db, runId);
-  const { entryId, ...payload } = input;
+  // 保留键（runId/seq/atMs）只能由本门分配：先剔除再展开。否则一次 append 即可
+  // 伪造 seq 造成永久 seq_gap，或走私他项目 runId（writeEventRow 按 ev.runId 落行，击穿 P5）。
+  // 此处是与 validateRunEventInput 剥离的双保险——lifecycle 通道（begin/finish/rejudge）不经校验，必须在此兜住。
+  const { entryId, runId: _forgedRunId, seq: _forgedSeq, atMs: _forgedAtMs, ...payload } = input as RunEventInput & { runId?: unknown; seq?: unknown; atMs?: unknown };
+  void _forgedRunId;
+  void _forgedSeq;
+  void _forgedAtMs;
   const redacted = redactDeep(payload, deps.redact) as typeof payload;
   const ev: RunEvent = {
     runId,

@@ -7,7 +7,8 @@
  */
 
 import { KernelError } from '../shared/util.ts';
-import type { RunEventInput, StepErrorReason, Verdict } from '../shared/domain.ts';
+import { severityRank } from '../shared/domain.ts';
+import type { RunEventInput, RunEventKind, StepErrorReason, Verdict } from '../shared/domain.ts';
 
 type Unknown = Record<string, unknown>;
 
@@ -78,8 +79,16 @@ function optSeverity(v: unknown): 'blocker' | 'critical' | 'major' | 'minor' | '
 function checkPolicy(v: unknown): void {
   if (!isObj(v)) throw new KernelError('invalid_params', 'policy 必须是对象');
   if (v['version'] !== 1) throw new KernelError('invalid_params', 'policy.version 必须是 1');
-  optSeverity(v['failOnSeverity']);
-  optSeverity(v['degradedOnSeverity']);
+  const failOn = optSeverity(v['failOnSeverity']);
+  const degradedOn = optSeverity(v['degradedOnSeverity']);
+  // 跨字段约束：degraded 门槛比 fail 门槛还高 ⇒ degraded 层按构造不可达，两字段几乎必然写反。
+  // 仅拒绝严格倒序；等值（failOn == degradedOn）是『关闭降级』的合法语义，放行。
+  if (severityRank(degradedOn) > severityRank(failOn)) {
+    throw new KernelError(
+      'invalid_params',
+      `policy.degradedOnSeverity(${degradedOn}) 不能比 policy.failOnSeverity(${failOn}) 更严重（降级层将不可达，疑似写反）`,
+    );
+  }
   if (!isObj(v['retry'])) throw new KernelError('invalid_params', 'policy.retry 必须是对象');
   int(v['retry']['maxAttempts'], 'policy.retry.maxAttempts', 1, 10);
   int(v['timeoutMs'], 'policy.timeoutMs', 1, 3_600_000);
@@ -89,6 +98,37 @@ function checkPolicy(v: unknown): void {
     for (const id of v['ignoreCaseIds']) int(id, 'policy.ignoreCaseIds[]', 1);
   }
 }
+
+/**
+ * 各 kind 的合法载荷字段白名单（与 shared/domain.ts 的 RunEventPayload 一一对应；
+ * 公共键 kind / entryId 之外，任何未知键都拒绝——半可信输入不得走私字段进真相层）。
+ * 白名单按「各通道实际写入的全部字段」盘点：run_started 的 envId/planSnapshot 由
+ * beginRun 经 lifecycle 通道写入，虽不经本校验，仍属该 kind 的合法字段。
+ */
+const PAYLOAD_KEYS: Record<RunEventKind, ReadonlySet<string>> = {
+  run_started: new Set(['policy', 'envId', 'concurrency', 'seed', 'planSnapshot']),
+  entry_started: new Set(['caseId', 'paramRowLabel', 'intent']),
+  request_sent: new Set(['stepSeq', 'method', 'url', 'headerNames']),
+  response_received: new Set(['stepSeq', 'status', 'durationMs', 'bodyRef', 'bodySha256']),
+  assert_evaluated: new Set(['assertSeq', 'stepSeq', 'severity', 'expected', 'actual', 'passed', 'principleId', 'sourceFile', 'sourceLine']),
+  var_extracted: new Set(['name', 'value']),
+  step_errored: new Set(['stepSeq', 'stepKind', 'reason', 'detail']),
+  retry_scheduled: new Set(['attempt', 'reason', 'delayMs']),
+  entry_finished: new Set(['attempts', 'durationMs']),
+  run_finished: new Set(['status']),
+  note: new Set(['text', 'by']),
+  run_paused: new Set(['by']),
+  run_resumed: new Set(['by']),
+  case_waived: new Set(['caseId', 'reason', 'by', 'expiresAtMs']),
+  case_overridden: new Set(['caseId', 'from', 'to', 'reason', 'by']),
+  run_voided: new Set(['reason', 'by']),
+  rejudged: new Set(['policy', 'by', 'note']),
+  ui_action: new Set(['stepSeq', 'stepKind', 'action', 'target', 'durationMs', 'detail', 'screenshotRef']),
+  db_checked: new Set(['stepSeq', 'connection', 'rowCount', 'durationMs', 'firstRowSample']),
+};
+
+/** 保留键：由事件日志门（seq 分配 / writeEventRow 按 runId 落行 / 时钟）分配，输入里出现一律静默剥离。 */
+const RESERVED_EVENT_KEYS: ReadonlySet<string> = new Set(['runId', 'seq', 'atMs']);
 
 export function validateRunEventInput(input: unknown): RunEventInput {
   if (!isObj(input)) throw new KernelError('invalid_params', '事件必须是对象');
@@ -113,9 +153,22 @@ export function validateRunEventInput(input: unknown): RunEventInput {
     'ui_action',
     'db_checked',
   ] as const);
+
+  // 字段白名单：未知键抛错；保留键剥离（不参与校验，也不透传——见 eventlog.writeNormalEvent 的双保险）
+  const allowed = PAYLOAD_KEYS[kind];
+  const clean: Record<string, unknown> = {};
+  for (const key of Object.keys(input)) {
+    if (key === 'kind' || key === 'entryId' || allowed.has(key)) {
+      clean[key] = input[key];
+      continue;
+    }
+    if (RESERVED_EVENT_KEYS.has(key)) continue;
+    throw new KernelError('invalid_params', `事件 ${kind} 含未知字段：${key}`);
+  }
+
   const entryId = input['entryId'] === null || input['entryId'] === undefined ? null : str(input['entryId'], 'entryId', 512);
 
-  const p = input;
+  const p = clean;
   switch (kind) {
     case 'run_started':
       checkPolicy(p['policy']);
@@ -137,7 +190,9 @@ export function validateRunEventInput(input: unknown): RunEventInput {
       break;
     case 'response_received':
       int(p['stepSeq'], 'stepSeq', 0, 100_000);
-      int(p['status'], 'status', 100, 599);
+      // 上限 999 而非 599：网关/代理层可见 600-999 的私有状态码（观测≠判定，
+      // judge 只把 response 当 hasObservation）；上限过紧会让 validate 抛错从 runner 逃出 → run 卡 running
+      int(p['status'], 'status', 100, 999);
       int(p['durationMs'], 'durationMs', 0, 3_600_000);
       optStr(p['bodyRef'], 'bodyRef', 128);
       optStr(p['bodySha256'], 'bodySha256', 128);
@@ -222,7 +277,7 @@ export function validateRunEventInput(input: unknown): RunEventInput {
       optStr(p['firstRowSample'], 'firstRowSample', 65_536);
       break;
   }
-  return input as unknown as RunEventInput;
+  return clean as unknown as RunEventInput;
 }
 
 export { enumOf, int, str as requireString, bool, strArray, isObj, checkPolicy };

@@ -375,11 +375,14 @@ function parseSource(c: TestCaseRecord, i: number, from: unknown, allowed: reado
   return obj as Record<string, unknown> & { kind: SourceKind };
 }
 
-function templateTextsOf(step: StepSpec): string[] {
+/** 步骤中携带模板（{{ns.name}}）的文本字段——编译期 validateRefs 与运行期 secret 收集共用同一清单。 */
+export function templateTextsOf(step: StepSpec): string[] {
   if (step.kind === 'request') {
     const texts = [step.url, step.body ?? '', ...Object.values(step.headers ?? {})];
     return texts.filter((t) => t.includes('{{'));
   }
+  if (step.kind === 'ui_navigate') return [step.url].filter((t) => t.includes('{{'));
+  if (step.kind === 'ui_fill') return [step.text].filter((t) => t.includes('{{'));
   return [];
 }
 

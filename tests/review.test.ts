@@ -3,7 +3,56 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { setupProject } from './helpers.ts';
+import { setupProject, testKernel } from './helpers.ts';
+import { applyEditsToPrinciple, applyEditsToRoute } from '../src/kernel/domain/review.ts';
+import type { PrincipleRecord, RouteCandidateRecord } from '../src/kernel/shared/domain.ts';
+
+/** 同步抛错的错误码提取（domain 纯函数用 code 断言，而不是匹配消息文案）。 */
+function errCode(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (e) {
+    return (e as { code?: string }).code ?? '(no code)';
+  }
+  return '(did not throw)';
+}
+
+const ROUTE: RouteCandidateRecord = {
+  id: 1,
+  projectId: 1,
+  sourceIndexId: 1,
+  method: 'GET',
+  path: '/v1/orders',
+  handlerFile: 'src/orders.ts',
+  handlerLine: 10,
+  framework: 'express',
+  confidence: 'medium',
+  status: 'proposed',
+  docDrift: false,
+  docMissing: false,
+  proposedBy: 'ts-morph',
+  reviewedBy: null,
+  reviewedAtMs: null,
+  diff: null,
+};
+
+const PRINCIPLE: PrincipleRecord = {
+  id: 1,
+  projectId: 1,
+  subject: '订单金额为正数',
+  rule: 'amount > 0',
+  valueJson: { type: 'number', min: 1 },
+  sourceFile: 'src/orders.ts',
+  sourceLine: 42,
+  layer: 'validation',
+  confidence: 'high',
+  status: 'proposed',
+  conflictJson: null,
+  proposedBy: 'fx-agent',
+  reviewedBy: null,
+  reviewedAtMs: null,
+  diff: null,
+};
 
 const DRAFT = {
   name: '订单幂等性验证',
@@ -104,5 +153,96 @@ describe('P3 状态机', () => {
       }),
     ).rejects.toMatchObject({ code: 'matrix_rows_exceeded' });
     s.kernel.close();
+  });
+});
+
+describe('P3 route/principle 就地编辑（applyEditsToRoute / applyEditsToPrinciple）', () => {
+  it('route 白名单：path/method/confidence 可改；framework 等溯源字段拒绝', () => {
+    const out = applyEditsToRoute(ROUTE, [
+      { path: 'method', from: 'GET', to: 'POST' },
+      { path: 'confidence', from: 'medium', to: 'high' },
+    ]);
+    expect(out).toMatchObject({ method: 'POST', confidence: 'high', path: '/v1/orders' });
+    // 不可编辑字段原样带出，供整体重校验
+    expect(out).toMatchObject({ handlerFile: 'src/orders.ts', handlerLine: 10, framework: 'express' });
+
+    expect(errCode(() => applyEditsToRoute(ROUTE, [{ path: 'framework', from: 'express', to: 'fastify' }]))).toBe('invalid_edit');
+    expect(errCode(() => applyEditsToRoute(ROUTE, [{ path: 'handlerFile', from: 'src/orders.ts', to: 'x.ts' }]))).toBe('invalid_edit');
+    expect(errCode(() => applyEditsToRoute(ROUTE, [{ path: 'id', from: 1, to: 2 }]))).toBe('invalid_edit');
+  });
+
+  it('principle 白名单：subject/rule/valueJson 可改（含嵌套 valueJson.min）；溯源字段拒绝', () => {
+    const out = applyEditsToPrinciple(PRINCIPLE, [
+      { path: 'subject', from: '订单金额为正数', to: '订单金额 ≥ 0.01' },
+      { path: 'valueJson.min', from: 1, to: 0.01 },
+    ]);
+    expect(out).toMatchObject({ subject: '订单金额 ≥ 0.01', rule: 'amount > 0' });
+    expect(out.valueJson).toEqual({ type: 'number', min: 0.01 });
+    expect(out).toMatchObject({ sourceFile: 'src/orders.ts', sourceLine: 42, layer: 'validation' });
+
+    expect(errCode(() => applyEditsToPrinciple(PRINCIPLE, [{ path: 'sourceFile', from: 'src/orders.ts', to: 'x.ts' }]))).toBe('invalid_edit');
+    expect(errCode(() => applyEditsToPrinciple(PRINCIPLE, [{ path: 'sourceLine', from: 42, to: 43 }]))).toBe('invalid_edit');
+    expect(errCode(() => applyEditsToPrinciple(PRINCIPLE, [{ path: 'layer', from: 'validation', to: 'sample' }]))).toBe('invalid_edit');
+  });
+
+  it('stale_edit：from 与当前值不符即拒；多编辑中任一失败 → 输入记录不被部分改写（回滚语义）', () => {
+    const snapshot = JSON.stringify(ROUTE);
+    // 第一个编辑合法、第二个基线陈旧 → 整体失败，没有任何"半套用"的内容逃逸
+    expect(errCode(() =>
+      applyEditsToRoute(ROUTE, [
+        { path: 'path', from: '/v1/orders', to: '/v2/orders' },
+        { path: 'method', from: 'PUT', to: 'POST' },
+      ]),
+    )).toBe('stale_edit');
+    expect(JSON.stringify(ROUTE)).toBe(snapshot);
+
+    // 值级嵌套同样受基线保护：valueJson.min 当前是 1，基于 999 的编辑被拒
+    expect(errCode(() => applyEditsToPrinciple(PRINCIPLE, [{ path: 'valueJson.min', from: 999, to: 0 }]))).toBe('stale_edit');
+    // valueJson 为 null 时嵌套编辑无从谈起 → stale_edit（而不是静默当成 undefined 匹配）
+    const noValue: PrincipleRecord = { ...PRINCIPLE, valueJson: null };
+    expect(errCode(() => applyEditsToPrinciple(noValue, [{ path: 'valueJson.min', from: 1, to: 0.01 }]))).toBe('stale_edit');
+  });
+
+  it('重校验失败回滚（kernel 层）：edit 应用后草稿非法 → 整体拒绝且不落半成品', async () => {
+    const h = testKernel();
+    const p = await h.kernel.call('project:create', { name: 'p', sourceType: 'local' });
+    const idx = await h.kernel.call('source:recordIndex', { projectId: p.id, fileCount: 1, frameworks: ['express'] });
+    await h.kernel.call('route:proposeBatch', {
+      projectId: p.id,
+      sourceIndexId: idx.id,
+      proposedBy: 'ts-morph',
+      routes: [{ method: 'POST', path: '/v1/orders', handlerFile: 'src/orders.ts', handlerLine: 10, framework: 'express', confidence: 'medium' }],
+    });
+    const r = (await h.kernel.call('route:list', { projectId: p.id }))[0]!;
+
+    // 编辑面合法、基线也对，但产物 path 不以 / 开头 → validateRouteDraft 在持久化前拒绝
+    await expect(
+      h.kernel.call('route:review', {
+        projectId: p.id, routeId: r.id, action: 'edit', actor: 'kel',
+        edits: [{ path: 'path', from: '/v1/orders', to: 'orders-no-slash' }],
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_params' });
+
+    const unchanged = await h.kernel.call('route:list', { projectId: p.id });
+    expect(unchanged.find((x) => x.id === r.id)).toMatchObject({ status: 'proposed', path: '/v1/orders', diff: null });
+
+    // principle 同构：subject 改空 → requireString 拒绝 → 记录原样
+    await h.kernel.call('principle:proposeBatch', {
+      projectId: p.id,
+      proposedBy: 'fx-agent',
+      principles: [
+        { subject: '订单金额为正数', rule: 'amount > 0', valueJson: null, sourceFile: 'src/orders.ts', sourceLine: 42, layer: 'validation', confidence: 'high' },
+      ],
+    });
+    const pr = (await h.kernel.call('principle:list', { projectId: p.id }))[0]!;
+    await expect(
+      h.kernel.call('principle:review', {
+        projectId: p.id, principleId: pr.id, action: 'edit', actor: 'kel',
+        edits: [{ path: 'subject', from: '订单金额为正数', to: '' }],
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_params' });
+    const pAfter = await h.kernel.call('principle:list', { projectId: p.id });
+    expect(pAfter.find((x) => x.id === pr.id)).toMatchObject({ status: 'proposed', subject: '订单金额为正数', diff: null });
+    h.dispose();
   });
 });

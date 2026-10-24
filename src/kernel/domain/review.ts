@@ -9,7 +9,16 @@
  */
 
 import { KernelError } from '../shared/util.ts';
-import type { ReviewAction, ReviewDiff, TestCaseDraft, TestCaseRecord } from '../shared/domain.ts';
+import type {
+  PrincipleDraft,
+  PrincipleRecord,
+  ReviewAction,
+  ReviewDiff,
+  RouteCandidateDraft,
+  RouteCandidateRecord,
+  TestCaseDraft,
+  TestCaseRecord,
+} from '../shared/domain.ts';
 
 export interface FieldEdit {
   path: string;
@@ -93,23 +102,78 @@ export function applyEditsToDraft(
     params: structuredClone(record.params),
     tags: [...record.tags],
   };
-  const allowedRoots = new Set(['name', 'description', 'steps', 'params', 'tags']);
+  applyFieldEdits(draft, edits, new Set(['name', 'description', 'steps', 'params', 'tags']), 'name/description/steps/params/tags');
+  return draft as unknown as TestCaseDraft;
+}
 
+/* ─────────────── route / principle 的就地编辑（契约声明了 action:'edit'，就必须可用） ─────────────── */
+
+/**
+ * 把字段级 diff 应用到路由候选内容上。
+ * 允许的编辑面：path / method / confidence——openapi:reconcile 产出「method 分叉 / 前缀未展开」
+ * 时，人工需要修的正是这两处（修完再整体重校验，而不是带错路径整条 adopt 污染后续合成）。
+ * handlerFile/handlerLine/framework 是源码溯源，改了等于换了出处——不可就地编辑。
+ */
+export function applyEditsToRoute(record: RouteCandidateRecord, edits: FieldEdit[]): RouteCandidateDraft {
+  const content: Record<string, unknown> = {
+    method: record.method,
+    path: record.path,
+    // 不可编辑字段原样带出
+    handlerFile: record.handlerFile,
+    handlerLine: record.handlerLine,
+    framework: record.framework,
+    confidence: record.confidence,
+  };
+  applyFieldEdits(content, edits, new Set(['path', 'method', 'confidence']), 'path/method/confidence');
+  return content as unknown as RouteCandidateDraft;
+}
+
+/**
+ * 把字段级 diff 应用到原则内容上。允许的编辑面：subject / rule / valueJson
+ * （valueJson 是 S3 → S5 的机器可读约束接口，人工校正它是常态）。
+ * sourceFile/sourceLine 溯源与 layer/confidence 提议属性不可就地编辑。
+ */
+export function applyEditsToPrinciple(record: PrincipleRecord, edits: FieldEdit[]): PrincipleDraft {
+  const content: Record<string, unknown> = {
+    subject: record.subject,
+    rule: record.rule,
+    valueJson: record.valueJson === null ? null : structuredClone(record.valueJson),
+    // 不可编辑字段原样带出
+    sourceFile: record.sourceFile,
+    sourceLine: record.sourceLine,
+    layer: record.layer,
+    confidence: record.confidence,
+  };
+  applyFieldEdits(content, edits, new Set(['subject', 'rule', 'valueJson']), 'subject/rule/valueJson');
+  return content as unknown as PrincipleDraft;
+}
+
+/**
+ * 字段级 diff 的共用应用循环（三条纪律）：
+ *  1. 白名单——首个路径段必须在允许编辑的字段集内，越界即 invalid_edit
+ *  2. 基线比对——from 与当前值不符即 stale_edit（防盲覆盖，陈旧编辑必须显式重放）
+ *  3. 只改传入的内容副本——任一编辑失败，副本整体作废，原记录不受半套用影响
+ */
+function applyFieldEdits(
+  content: Record<string, unknown>,
+  edits: FieldEdit[],
+  allowedRoots: ReadonlySet<string>,
+  allowedLabel: string,
+): void {
   for (const edit of edits) {
     const segments = parsePath(edit.path);
     if (segments.length === 0 || typeof segments[0] !== 'string' || !allowedRoots.has(segments[0])) {
-      throw new KernelError('invalid_edit', `不可编辑的字段：${edit.path}（允许 name/description/steps/params/tags）`);
+      throw new KernelError('invalid_edit', `不可编辑的字段：${edit.path}（允许 ${allowedLabel}）`);
     }
-    const current = getByPath(draft, segments);
+    const current = getByPath(content, segments);
     if (JSON.stringify(current) !== JSON.stringify(edit.from)) {
       throw new KernelError(
         'stale_edit',
         `编辑基线不符：${edit.path} 当前为 ${JSON.stringify(current)?.slice(0, 120)}，编辑基于 ${JSON.stringify(edit.from)?.slice(0, 120)}`,
       );
     }
-    setByPath(draft, segments, edit.to);
+    setByPath(content, segments, edit.to);
   }
-  return draft as unknown as TestCaseDraft;
 }
 
 function parsePath(path: string): (string | number)[] {

@@ -85,6 +85,35 @@ export function applyRouteReview(
   return getRoute(db, scope, routeId)!;
 }
 
+/** edit 裁决：状态 + 留痕 + **应用后的新内容**一并落库（模式同 casesRepo.applyReviewWithContent）。 */
+export function applyRouteReviewWithContent(
+  db: Db,
+  scope: ProjectScope,
+  routeId: number,
+  next: { status: ReviewStatus; diff: ReviewDiff | null; reviewedBy: string; reviewedAtMs: number },
+  content: Pick<RouteCandidateDraft, 'method' | 'path' | 'confidence'>,
+): RouteCandidateRecord {
+  const changes = db
+    .prepare(
+      `UPDATE route_candidate SET status = ?, reviewed_by = ?, reviewed_at_ms = ?, diff = ?,
+                              method = ?, path = ?, confidence = ?
+       WHERE id = ? AND project_id = ?`,
+    )
+    .run(
+      next.status,
+      next.reviewedBy,
+      next.reviewedAtMs,
+      next.diff === null ? null : JSON.stringify(next.diff),
+      content.method,
+      content.path,
+      content.confidence,
+      routeId,
+      scope.projectId,
+    ).changes;
+  if (changes === 0) throw new KernelError('not_found', `路由候选 ${routeId} 不存在`);
+  return getRoute(db, scope, routeId)!;
+}
+
 type RouteRow = {
   id: number; project_id: number; source_index_id: number; method: string; path: string;
   handler_file: string; handler_line: number; framework: string; confidence: string; status: string;
@@ -160,6 +189,35 @@ export function applyPrincipleReview(
   const changes = db
     .prepare('UPDATE principle SET status = ?, reviewed_by = ?, reviewed_at_ms = ?, diff = ? WHERE id = ? AND project_id = ?')
     .run(next.status, next.reviewedBy, next.reviewedAtMs, next.diff === null ? null : JSON.stringify(next.diff), principleId, scope.projectId).changes;
+  if (changes === 0) throw new KernelError('not_found', `原则 ${principleId} 不存在`);
+  return getPrinciple(db, scope, principleId)!;
+}
+
+/** edit 裁决：状态 + 留痕 + **应用后的新内容**一并落库（模式同 casesRepo.applyReviewWithContent）。 */
+export function applyPrincipleReviewWithContent(
+  db: Db,
+  scope: ProjectScope,
+  principleId: number,
+  next: { status: ReviewStatus; diff: ReviewDiff | null; reviewedBy: string; reviewedAtMs: number },
+  content: Pick<PrincipleDraft, 'subject' | 'rule' | 'valueJson'>,
+): PrincipleRecord {
+  const changes = db
+    .prepare(
+      `UPDATE principle SET status = ?, reviewed_by = ?, reviewed_at_ms = ?, diff = ?,
+                           subject = ?, rule = ?, value_json = ?
+       WHERE id = ? AND project_id = ?`,
+    )
+    .run(
+      next.status,
+      next.reviewedBy,
+      next.reviewedAtMs,
+      next.diff === null ? null : JSON.stringify(next.diff),
+      content.subject,
+      content.rule,
+      content.valueJson === null ? null : JSON.stringify(content.valueJson),
+      principleId,
+      scope.projectId,
+    ).changes;
   if (changes === 0) throw new KernelError('not_found', `原则 ${principleId} 不存在`);
   return getPrinciple(db, scope, principleId)!;
 }
