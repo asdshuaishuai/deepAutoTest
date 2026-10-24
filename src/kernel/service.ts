@@ -21,12 +21,13 @@ import * as dbconnsRepo from './store/repos/dbconns.ts';
 import * as agentsRepo from './store/repos/agents.ts';
 import { decryptSecret, encryptSecret } from './store/secrets.ts';
 import { appendEvents, beginRun, finishRun, judgeRunFromDb, rebuildProjections, rejudgeRun, verifyIntegrity, type EventLogDeps, type IntegrityReport } from './domain/eventlog.ts';
-import { applyReview, type FieldEdit } from './domain/review.ts';
+import { applyReview, applyEditsToDraft, type FieldEdit } from './domain/review.ts';
 import { diffRuns } from './domain/diff.ts';
 import { bool, checkPolicy, enumOf, int, isObj, requireString } from './domain/validate.ts';
 import { defaultRedactOptions, redactDeep, type RedactOptions } from './domain/redact.ts';
 import { KernelError, realClock, median, type Clock } from './shared/util.ts';
 import { renderExport, type ExportFormat } from './domain/export.ts';
+import { parseSpec as parseOpenApiSpec, reconcile as reconcileOpenApi } from './domain/openapi.ts';
 import type { ProjectScope } from './shared/ids.ts';
 import type {
   AssertResultRow,
@@ -145,6 +146,10 @@ export interface KernelMethods {
   'run:passRate': { req: { projectId: number; runId: number; basis?: 'strict' | 'lenient' | 'excluding_errored' }; res: { basis: string; rate: number | null; numerator: number; denominator: number } };
   'metrics:stability': { req: { projectId: number; window?: number; limit?: number }; res: { rows: { caseId: number; name: string; runs: number; passes: number; flakyRuns: number; lastVerdict: string | null }[] } };
   'run:applyRetention': { req: { projectId: number; retentionDays?: number }; res: { pruned: number; protectedRefs: number } };
+  'openapi:reconcile': {
+    req: { projectId: number; spec: unknown };
+    res: { compared: number; aligned: number; drift: { routeId: number; method: string; path: string; docMethods: string[] }[]; missing: { routeId: number; method: string; path: string }[]; docOnly: { method: string; path: string }[] };
+  };
   'artifact:put': { req: { contentType?: string | null; contentBase64: string }; res: { sha256: string; sizeBytes: number; truncated: boolean; originalSize: number } };
   'artifact:get': { req: { sha256: string }; res: { contentType: string | null; contentBase64: string; truncated: boolean; originalSize: number } };
 }
@@ -265,6 +270,12 @@ export function createKernel(options: KernelOptions): Kernel {
       const actor = requireString(o['actor'], 'actor', 256);
       const edits = validateEdits(o['edits']);
       const result = applyReview(record, action, actor, edits, clock.nowMs());
+      if (action === 'edit') {
+        // P3 就地编辑：diff 不仅留痕，还真实应用（应用后重新校验草稿形状）
+        const content = applyEditsToDraft(record, edits);
+        validateCaseDraft(content as unknown as TestCaseDraft);
+        return casesRepo.applyReviewWithContent(db, sc, caseId, result, content);
+      }
       return casesRepo.applyReviewResult(db, sc, caseId, result);
     },
     'run:begin': (p) => {
@@ -746,6 +757,21 @@ export function createKernel(options: KernelOptions): Kernel {
       const retentionDays = o['retentionDays'] === undefined ? 90 : int(o['retentionDays'], 'retentionDays', 0, 3650); // 0 = 全部视为过期
       const cutoff = clock.nowMs() - retentionDays * 86_400_000;
       return applyRetention(db, sc, cutoff, artifactsDir);
+    },
+    'openapi:reconcile': (p) => {
+      const o = isObj(p) ? p : {};
+      const sc = scope(o['projectId']);
+      const paths = parseOpenApiSpec(o['spec']);
+      const routes = sourcesRepo.listRoutes(db, sc).filter((r) => r.status !== 'rejected');
+      const outcome = reconcileOpenApi(routes, paths);
+      sourcesRepo.applyDocFlags(db, sc, outcome.flags);
+      return {
+        compared: outcome.compared,
+        aligned: outcome.aligned,
+        drift: outcome.drift,
+        missing: outcome.missing,
+        docOnly: outcome.docOnly,
+      };
     },
     'artifact:put': (p) => {
       const o = isObj(p) ? p : {};

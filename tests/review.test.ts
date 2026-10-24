@@ -51,7 +51,7 @@ describe('P3 状态机', () => {
     s.kernel.close();
   });
 
-  it('人工修改后采纳 → 必须携带结构化 diff', async () => {
+  it('人工修改后采纳 → diff 留痕且内容真实应用（07 §5.2 就地编辑）', async () => {
     const s = await setupProject();
     const c = await s.kernel.call('case:propose', { projectId: s.projectId, proposedBy: 'fx-agent', draft: DRAFT });
 
@@ -64,19 +64,15 @@ describe('P3 状态机', () => {
       caseId: c.id,
       action: 'edit',
       actor: 'kel',
-      edits: [
-        { path: 'steps[0].expected', from: '"金额超限"', to: '"AMOUNT_EXCEEDED"' },
-        { path: 'steps[0].severity', from: 'major', to: 'critical' },
-      ],
+      edits: [{ path: 'name', from: '订单幂等性验证', to: '订单幂等性验证（人工修订）' }],
     });
     expect(edited.status).toBe('adopted');
     expect(edited.diff).toMatchObject({
       editedBy: 'kel',
-      fields: [
-        { path: 'steps[0].expected', from: '"金额超限"', to: '"AMOUNT_EXCEEDED"' },
-        { path: 'steps[0].severity', from: 'major', to: 'critical' },
-      ],
+      fields: [{ path: 'name', from: '订单幂等性验证', to: '订单幂等性验证（人工修订）' }],
     });
+    // ★ 内容真的变了（不只是记录）
+    expect(edited.name).toBe('订单幂等性验证（人工修订）');
     s.kernel.close();
   });
 

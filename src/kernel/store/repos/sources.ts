@@ -189,3 +189,11 @@ function toPrinciple(row: PrincipleRow): PrincipleRecord {
     diff: row.diff === null ? null : (JSON.parse(row.diff) as ReviewDiff),
   };
 }
+
+/** OpenAPI 对账结果落列（06 §2.2 doc_drift / doc_missing）。 */
+export function applyDocFlags(db: Db, scope: ProjectScope, flags: Map<number, { drift: boolean; missing: boolean }>): void {
+  const stmt = db.prepare('UPDATE route_candidate SET doc_drift = ?, doc_missing = ? WHERE id = ? AND project_id = ?');
+  for (const [routeId, f] of flags) {
+    stmt.run(f.drift ? 1 : 0, f.missing ? 1 : 0, routeId, scope.projectId);
+  }
+}

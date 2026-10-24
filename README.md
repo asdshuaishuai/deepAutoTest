@@ -1,7 +1,7 @@
 # deepAutoTest
 
 > 源码驱动的 API 自动化测试工作台 · 设计稿 v1.0
-> **状态：引擎层全部落地（基座/分析/合成/执行/PRD/UI 测试/采样/db_check/Agent/运行生命周期），169 项验收测试（W1 已验证：libfx 子进程加载 + native 后端 + refused 失败形态）。**
+> **状态：引擎层全部落地（基座/分析/合成/执行/PRD/UI 测试/采样/db_check/Agent/运行生命周期/OpenAPI 对账），174 项验收测试（W1 已验证：libfx 子进程加载 + native 后端 + refused 失败形态）。**
 > **UI 壳（桌面应用）是独立的另一个项目**，不在本仓库——引擎层只暴露 `kernel.call` 单一入口，任何壳（webview 桌面 / CLI / 未来形态）都是它的传输适配层。
 > 独立项目，与 deepStudio 共享哲学，不共享代码。
 > 前身设计稿名 `autoTestStudio`，本稿更名为 **deepAutoTest**。
@@ -109,7 +109,7 @@ deepAutoTest 不依赖 deepStudio 的任何代码、产物或运行时。两者�
 | **判定纯函数** `verdict = reduce(events, policy)` | 04 §3 | 04 §3.5 十用例 + 边界穷举（`judge.test.ts`） |
 | **投影可从事件重建** | 04 §1 / 06 §4.1 | ★ 旗舰测试：删投影→重建→逐字段一致（`projection-rebuild.test.ts`） |
 | 重判 preview/apply + RunDiff | 04 §5 | apply 后从事件重建与投影一致（`rejudge.test.ts` / `run-diff.test.ts`） |
-| P3 人机门（proposed→adopted/rejected + diff 留痕） | 07 §5 | AI 无路径产出 adopted（`review.test.ts`） |
+| P3 人机门（proposed→adopted/rejected + diff 留痕 + **edit 真实应用**） | 07 §5 | AI 无路径产出 adopted；就地编辑=字段补丁真实生效（陈旧基线拒、非法草稿整体拒、routeId 不可改） |
 | 写时脱敏（手机号/邮箱/证件/凭据字段） | 08 §4 | 库内明文零命中（`redact.test.ts`） |
 | SQLite（`node:sqlite`，零原生依赖）+ 只增迁移 + checksum | 06 §1 | 已发布迁移被改→拒绝启动（`migrations.test.ts`） |
 | Kernel 单一入口 + 方法白名单 + 运行时校验 | 02 §4 / §7.1 | 未知方法拒绝（`contract.test.ts`） |
@@ -117,7 +117,7 @@ deepAutoTest 不依赖 deepStudio 的任何代码、产物或运行时。两者�
 
 ```bash
 npm install
-npm test        # 169 项验收测试（Vitest；含真浏览器 UI / 真库采样 / 真子进程 Agent probe / 生命周期）
+npm test        # 174 项验收测试（Vitest；含真浏览器 UI / 真库采样 / 真子进程 Agent probe / 生命周期 / OpenAPI 对账）
 npm run demo    # 基座 headless 全生命周期（提议→人机门→留痕→判定→重建→重判→脱敏）
 npm run demo:exec # 执行层全闭环（mock 服务 + 真实 HTTP）
 npm run demo:e2e  # ★ 全链路（源码→原则→用例→执行→反馈）
@@ -144,7 +144,7 @@ npm run typecheck
 | `plan-compiler.ts` | 用例集 → RunPlan；**一律拒绝编译而非跳过**：非 adopted 用例、var 引用晚于定义、目标 URL 在 env 域名外（防注入用例）、matrix 超限、db_check（M3 前明确不支持）；entry 内嵌步骤快照（04 §2.2 同源） | 03 §3 |
 | `evaluate.ts` | 断言求值纯函数（12 种操作符 / body_json 路径 / 数值优先比较） | 03 §2.4 |
 | `sandbox.ts` | script 步骤 vm 沙箱（超时强杀、无 require/process；诚实声明：非安全边界，M6 升级） | 08 §6 |
-| `runner.ts` | undici 引擎：精确超时（AbortController——undici parser 超时粒度约 1s，实测）、重试→flaky、大报文 artifact 外置、自签 TLS per-env、secret 全链路不落库（URL/断言 actual/提取值三处掩码） | 03 §5 |
+| `runner.ts` | undici 引擎：精确超时（AbortController——undici parser 超时粒度约 1s，实测）、**重试→flaky（传输错误与 5xx/断言同一决策，`retry.on` 过滤生效）**、大报文 artifact 外置、自签 TLS per-env、secret 全链路不落库（URL/断言 actual/提取值三处掩码） | 03 §5 |
 
 ```bash
 npm run demo:exec   # mock 服务全闭环：编译→执行→判定（边界失败定位/flaky）→对账→重建
@@ -173,7 +173,9 @@ const scan = await indexLocalSource(kernel, projectId, '/path/to/repo');
 // → { sourceIndexId, fileCount, frameworks, routesInserted, principlesInserted }
 ```
 
-> 已知边界（诚实声明）：`app.use('/prefix', router)` 的挂载前缀合成暂未展开（路由按字面路径记录，diff 复核时人工确认）；git/zip 接入与 OpenAPI 对账（doc_drift/doc_missing 标记）属后续层。
+> OpenAPI 对账（`openapi:reconcile`）：源码路由 vs 文档 spec（JSON 对象；YAML 请先自行解析——基座零依赖），落 **doc_drift**（路径在文档但 method 分叉）/ **doc_missing**（源码有文档无）两类可筛选标记，并报告文档独有端点；路径模板归一（`/:id` ≡ `/{orderId}`，参数段只比位置）。
+>
+> 已知边界（诚实声明）：`app.use('/prefix', router)` 的挂载前缀合成暂未展开（路由按字面路径记录，diff 复核时人工确认）；git/zip 接入属后续层。
 
 ---
 

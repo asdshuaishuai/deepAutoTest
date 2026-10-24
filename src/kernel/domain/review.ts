@@ -9,7 +9,7 @@
  */
 
 import { KernelError } from '../shared/util.ts';
-import type { ReviewAction, ReviewDiff, TestCaseRecord } from '../shared/domain.ts';
+import type { ReviewAction, ReviewDiff, TestCaseDraft, TestCaseRecord } from '../shared/domain.ts';
 
 export interface FieldEdit {
   path: string;
@@ -67,4 +67,77 @@ export function applyReview(
     default:
       throw new KernelError('invalid_action', `未知裁决动作：${String(action)}`);
   }
+}
+
+/* ─────────────── edit 的真实应用（07 §5.2：就地编辑，不只是记录） ─────────────── */
+
+/**
+ * 把字段级 diff 应用到用例草稿内容上。
+ * 「from 不匹配当前值」→ 拒绝（陈旧编辑，防盲覆盖）；应用后整体重新校验草稿。
+ * 允许的编辑面：name / description / steps / params / tags（routeId 不可编辑——
+ * 路由归属变了等于换了个被测对象，应走新用例）。
+ */
+export function applyEditsToDraft(
+  record: TestCaseRecord,
+  edits: FieldEdit[],
+): TestCaseDraft {
+  const draft: Record<string, unknown> = {
+    name: record.name,
+    description: record.description,
+    // 不可编辑字段原样带出（routeId 变更等于换被测对象；P3 编辑面仅限内容五域）
+    routeId: record.routeId,
+    paramKind: record.paramKind,
+    provenance: structuredClone(record.provenance),
+    policyOverride: record.policyOverride === null ? null : structuredClone(record.policyOverride),
+    steps: structuredClone(record.steps),
+    params: structuredClone(record.params),
+    tags: [...record.tags],
+  };
+  const allowedRoots = new Set(['name', 'description', 'steps', 'params', 'tags']);
+
+  for (const edit of edits) {
+    const segments = parsePath(edit.path);
+    if (segments.length === 0 || typeof segments[0] !== 'string' || !allowedRoots.has(segments[0])) {
+      throw new KernelError('invalid_edit', `不可编辑的字段：${edit.path}（允许 name/description/steps/params/tags）`);
+    }
+    const current = getByPath(draft, segments);
+    if (JSON.stringify(current) !== JSON.stringify(edit.from)) {
+      throw new KernelError(
+        'stale_edit',
+        `编辑基线不符：${edit.path} 当前为 ${JSON.stringify(current)?.slice(0, 120)}，编辑基于 ${JSON.stringify(edit.from)?.slice(0, 120)}`,
+      );
+    }
+    setByPath(draft, segments, edit.to);
+  }
+  return draft as unknown as TestCaseDraft;
+}
+
+function parsePath(path: string): (string | number)[] {
+  return path
+    .replace(/\[(\d+)\]/g, '.$1')
+    .split('.')
+    .filter((seg) => seg.length > 0)
+    .map((seg) => (/^\d+$/.test(seg) ? Number(seg) : seg));
+}
+
+function getByPath(obj: unknown, segments: (string | number)[]): unknown {
+  let cur: unknown = obj;
+  for (const seg of segments) {
+    if (cur === null || cur === undefined) return undefined;
+    cur = (cur as Record<string | number, unknown>)[seg];
+  }
+  return cur;
+}
+
+function setByPath(obj: unknown, segments: (string | number)[], value: unknown): void {
+  let cur: unknown = obj;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const seg = segments[i]!;
+    const next = (cur as Record<string | number, unknown>)[seg];
+    if (next === null || typeof next !== 'object') {
+      throw new KernelError('invalid_edit', `路径不可解析：${segments.join('.')}`);
+    }
+    cur = next;
+  }
+  (cur as Record<string | number, unknown>)[segments[segments.length - 1]!] = value;
 }

@@ -114,8 +114,16 @@ export async function executePlan(opts: ExecutePlanOptions): Promise<ExecuteResu
             await append(opts, [{ kind: 'run_resumed', entryId: null, by: 'user' }]);
           }
           startedEntries.add(entry.entryId);
-          await runEntry(opts, dispatcher, entry);
-          executed += 1;
+          try {
+            await runEntry(opts, dispatcher, entry);
+            executed += 1;
+          } catch (err) {
+            if ((err as Error).name === 'AbortError' || opts.signal?.aborted) {
+              cancelled = true;
+              return;
+            }
+            throw err;
+          }
         }
       }
     };
@@ -184,9 +192,11 @@ async function runEntry(opts: ExecutePlanOptions, dispatcher: Dispatcher | undef
     for (;;) {
       attempt += 1;
       const outcome = await runAttempt(opts, dispatcher, entry, secrets, uiState);
-      if (outcome.stepError === null && attempt < maxAttempts && shouldRetry(retryOn, outcome.retryReason)) {
+      // 重试候选：step 错误（connect_failed/超时…）与 attempt 级原因（http_5xx/断言失败）同一决策（03 §5.3）
+      const retryCandidate = outcome.stepError ?? outcome.retryReason;
+      if (attempt < maxAttempts && shouldRetry(retryOn, retryCandidate)) {
         await append(opts, [
-          { kind: 'retry_scheduled', entryId: entry.entryId, attempt: attempt + 1, reason: outcome.retryReason!, delayMs: backoffMs(plan, attempt) },
+          { kind: 'retry_scheduled', entryId: entry.entryId, attempt: attempt + 1, reason: retryCandidate!, delayMs: backoffMs(plan, attempt) },
         ]);
         continue;
       }

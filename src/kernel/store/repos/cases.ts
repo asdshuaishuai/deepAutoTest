@@ -130,3 +130,34 @@ function toCase(row: CaseRow): TestCaseRecord {
     createdAtMs: row.created_at_ms,
   };
 }
+
+/** edit 裁决：状态 + 留痕 + **应用后的新内容**一并落库。 */
+export function applyReviewWithContent(
+  db: Db,
+  scope: ProjectScope,
+  caseId: number,
+  next: { status: ReviewStatus; diff: ReviewDiff | null; reviewedBy: string; reviewedAtMs: number },
+  content: { name: string; description: string | null; steps: unknown; params: unknown; tags: string[] },
+): TestCaseRecord {
+  const changes = db
+    .prepare(
+      `UPDATE test_case SET status = ?, reviewed_by = ?, reviewed_at_ms = ?, diff = ?,
+                              name = ?, description = ?, steps_json = ?, params_json = ?, tags = ?
+       WHERE id = ? AND project_id = ?`,
+    )
+    .run(
+      next.status,
+      next.reviewedBy,
+      next.reviewedAtMs,
+      next.diff === null ? null : JSON.stringify(next.diff),
+      content.name,
+      content.description,
+      JSON.stringify(content.steps),
+      JSON.stringify(content.params),
+      JSON.stringify(content.tags),
+      caseId,
+      scope.projectId,
+    ).changes;
+  if (changes === 0) throw new KernelError('not_found', `用例 ${caseId} 不存在`);
+  return getCase(db, scope, caseId)!;
+}
